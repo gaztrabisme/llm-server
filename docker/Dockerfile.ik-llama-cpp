@@ -1,0 +1,53 @@
+# ik_llama.cpp fork — CUDA build for RTX 5080 (sm_120)
+# Includes MoE-specific optimizations (--merge-qkv, -gr, -fmoe, etc.)
+# Multi-stage: build in devel image, run in runtime image
+
+# === Build Stage ===
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Clone ik_llama.cpp fork
+RUN git clone --depth 1 https://github.com/ikawrakow/ik_llama.cpp.git .
+
+# Make CUDA driver stub findable by the linker (real libcuda.so is injected at runtime by nvidia-container-toolkit)
+# Need both libcuda.so and libcuda.so.1 — the shared lib records DT_NEEDED for libcuda.so.1
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+    && ldconfig
+
+# Build with CUDA, no BLAS (ik fork recommendation), sm_120, FA all quants
+RUN cmake -B build \
+    -DGGML_CUDA=ON \
+    -DGGML_BLAS=OFF \
+    -DCMAKE_CUDA_ARCHITECTURES=120 \
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j$(nproc) \
+    && cmake --install build --prefix /opt/ik-llama-cpp
+
+# === Runtime Stage ===
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/ik-llama-cpp /opt/ik-llama-cpp
+
+# Add to PATH and library search path
+ENV PATH="/opt/ik-llama-cpp/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/ik-llama-cpp/lib:${LD_LIBRARY_PATH}"
+
+# Default model mount point
+VOLUME /models
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["llama-server"]

@@ -1,0 +1,24 @@
+# Models (large GGUF files)
+models/
+!models/.gitkeep
+
+# Benchmark results
+benchmarks/
+!benchmarks/.gitkeep
+
+# Python venv
+.venv/
+
+# Docker build cache
+.docker-build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

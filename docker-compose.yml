@@ -1,0 +1,48 @@
+services:
+  llama-cpp:
+    profiles: ["llama-cpp"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.llama-cpp
+    image: llm-server/llama-cpp:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    env_file: configs/llama-cpp-baseline.env
+    ipc: host
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  ik-llama:
+    profiles: ["ik-llama"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ik-llama-cpp
+    image: llm-server/ik-llama-cpp:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    env_file: configs/ik-llama-baseline.env
+    ipc: host
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
