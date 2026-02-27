@@ -143,7 +143,7 @@ Compare with: `python3 scripts/compare-results.py benchmarks/`
 - **E5: Vision Mode** — `--mmproj` + `--fit-target 2000` + lmms-eval quality benchmarks (OCRBench, MMMU, MathVista, RealWorldQA, AI2D)
 - **E6: Community Notes** — Guidance for AMD/ROCm, Vulkan, 8GB VRAM, 24GB VRAM, LM Studio users
 
-New scripts: `bench-matrix.sh` (universal benchmark runner with PP+TG), `compare-matrix.py` (matrix comparison tool), `vision-eval.sh` (vision quality eval). All spec'd, implementation pending.
+New scripts: `bench-matrix.sh` (universal benchmark runner with PP+TG), `compare-matrix.py` (matrix comparison tool), `vision-eval.sh` (vision quality eval). Shared bench library: `lib-bench-common.sh` (env parsing, Docker lifecycle, VRAM capture). All implemented and dry-run verified.
 
 ### Ready to Test
 - **Thinking mode** — on by default in Qwen3.5, verify it works well with downstream apps
@@ -181,7 +181,8 @@ See `docs/dev/006-community-followup/` for community follow-up experiments:
 See `docs/dev/007-community-experiments/` for Session 007 (in progress):
 - `success-criteria.md` — 6 experiments: KV deep dive, PP/TG tradeoff, MXFP4 redemption, fixed UD-Q4_K_XL, vision, community notes
 - 14 config files in `configs/llama-cpp-s007-*.env`
-- New scripts: `bench-matrix.sh`, `compare-matrix.py`, `vision-eval.sh` (spec'd, implementation pending)
+- Scripts: `bench-matrix.sh`, `compare-matrix.py`, `vision-eval.sh`, `lib-bench-common.sh` (all implemented, dry-run verified)
+- Next: download MXFP4/UD-Q4_K_XL models, build vision Docker image, run experiments E1-E6
 
 ### Daniel's Component Ablation Study
 
