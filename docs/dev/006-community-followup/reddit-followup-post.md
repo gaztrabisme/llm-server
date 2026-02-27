@@ -29,6 +29,8 @@ Fair concern — I claimed KV q8_0 was free but didn't have PPL data to back it 
 
 **Recommendation unchanged**: Use `-ctk q8_0 -ctv q8_0` for +12-38% throughput at zero measurable quality cost.
 
+**Caveat**: These PPL tests used 512 token context. Some users report KV q8_0 degrading at very long contexts (40-100k tokens) where quantization errors may accumulate. If you're regularly running huge contexts, test carefully.
+
 ---
 
 ## Experiment 2: KL Divergence — Does PPL tell the whole story?
@@ -131,11 +133,11 @@ Some of you asked whether the dense 27B model might be a better fit for single-G
 | 35B-A3B Q4_K_M fit-nobatch | 74.7 tok/s | 72.9 | 73.7 | 76.1 | 14559 MB |
 | **27B dense fit** | **7.4 tok/s** | **7.4** | **7.2** | **7.1** | **14075 MB** |
 
-Yes, that's **10x slower**. And it has worse quality.
+Yes, that's **10x slower**.
 
 The dense model needs all 27B parameters computed per token vs only ~3B active for MoE. Even with `--fit` putting 54/65 layers on GPU, the remaining 11 layers on CPU create a massive bottleneck. Theoretical max even fully on GPU: ~61 tok/s (960 GB/s ÷ 15.6 GB model).
 
-**Verdict**: The MoE architecture is the entire advantage on consumer hardware. Only ~3B active params per token means ~10x less memory bandwidth per token. **The 35B-A3B MoE dominates on both speed AND quality.** The 27B dense is only worth considering if you need a non-MoE model for compatibility reasons.
+**Verdict**: **The 35B-A3B MoE is vastly faster on 16GB VRAM setups.** PPL comparisons across different architectures (MoE vs dense) aren't apples-to-apples — the 27B is the stronger model on capability benchmarks and instruction following. If you can fit it fully in VRAM (24GB+ cards), it's a great choice. On 16GB where it runs at 7 tok/s, it's not practical for interactive use.
 
 ---
 
@@ -185,7 +187,7 @@ For **RTX 30/40-series**: pre-built is fine (0-5% difference). Those architectur
 
 ### 8 GB VRAM recommendations (u/Qxz3)
 
-Use Q4_K_M with full expert offload (`-ot "exps=CPU"`): ~7.2 GB VRAM, ~50 tok/s in our tests. Key flags: `-ctk q8_0 -ctv q8_0` (free lunch), `-fa on`, `--no-mmap`, and tune your thread count (try `physical_cores / 1.5` as starting point, sweep from there).
+Use Q4_K_M with full expert offload (`-ot "exps=CPU"`): ~7.2 GB VRAM, ~50 tok/s in our tests **(on RTX 5080 — your results will vary depending on GPU memory bandwidth)**. Key flags: `-ctk q8_0 -ctv q8_0` (free lunch), `-fa on`, `--no-mmap`, and tune your thread count (try `physical_cores / 1.5` as starting point, sweep from there).
 
 ---
 
@@ -222,7 +224,7 @@ Based on everything above, here's the new recommended config. Simpler AND faster
 | Bartowski Q4_K_L | -0.8% PPL, -36% KLD, but 44% slower | **Not worth it on 16GB** |
 | `--fit` without batch flags | 74.7 tok/s (+7% over manual) | **New best config** |
 | ngram self-speculation | No speedup, unstable | **Don't bother** |
-| 27B dense vs 35B-A3B MoE | 10x slower, worse quality | **MoE wins completely** |
+| 27B dense vs 35B-A3B MoE | 10x slower on 16GB; stronger model if fully in VRAM | **MoE wins on speed** |
 | MXFP4_MOE | Marginal quality gain, 34-42% slower | **Q4_K_M still best** |
 
 ---
@@ -254,3 +256,13 @@ All raw data (benchmark JSONs, PPL logs, KLD logs, config files) is in [my llm-s
 ---
 
 **Edit**: Previous post [here]. This is a follow-up with all the experiments you requested.
+
+**EDIT 2**: Corrected some numbers that had errors in the original post. None of the conclusions change:
+
+- **E2 (KLD)**: Max KLD values were wrong — Q4_K_M is 4.21 (not 0.19), UD-Q4_K_XL is 7.79 (not 1.22). This actually makes UD-Q4_K_XL look *worse* than originally stated.
+- **E5 (Speculative)**: ngram-simple multi-turn was 49.1 tok/s (not 51.3). Still no benefit.
+- **E7 (MXFP4)**: Mean KLD is 0.050 (not 0.037), PPL is ~5.9-6.2 (partial, memory leak crashed all full runs), multi-turn speed is 43.0 tok/s (not 44.1). Still not recommended over Q4_K_M.
+
+All values verified against raw log files. Corrected data and raw logs in [my repo](https://github.com/gaztrabisme/llm-server).
+
+**EDIT 3**: Updated E6 (27B dense) wording — several commenters correctly pointed out that calling 27B "worse quality" based on PPL alone is misleading. The 27B dominates on capability benchmarks and instruction following; my results only show it's 10x slower on 16GB VRAM where it can't fit fully on GPU. If you have a 24GB+ card and can load it entirely in VRAM, 27B is a great model. Added caveat to E1 (KV q8_0) that my PPL tests used 512 token context — some users report degradation at very long contexts (40-100k+). Clarified that the ~50 tok/s 8GB VRAM number was on RTX 5080, not a separate 8GB card. `--fit on` results are CUDA-specific — u/Corosus found it tanks performance on Vulkan (13 vs 33 tok/s on 5070 Ti), stick with manual `--n-cpu-moe` offloading for Vulkan. Reworded E6 verdict — PPL across different architectures isn't an apples-to-apples quality comparison. Thanks u/_-_David, u/ArckToons, u/Front_Eagle739, u/cookieGaboo24, u/theghost3172, and u/Corosus.
