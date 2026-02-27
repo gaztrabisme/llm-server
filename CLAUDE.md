@@ -19,7 +19,7 @@ Run large Mixture-of-Experts models locally and serve them via API for other pro
 - MoE: 256 experts per layer, top-8 routing + 1 shared expert (9 active), 40 MoE layers, ~3B active params per token
 - 65536 context length, thinking mode enabled by default
 - WikiText-2 PPL: Q8_0 = 6.5342, Q4_K_M = 6.6688 (+2.1% — negligible quality loss)
-- UD-Q4_K_XL NOT recommended: PPL 7.1702 (+9.7%, worse than standard Q4_K_M)
+- UD-Q4_K_XL: S006 showed 3.9x worse KLD due to MXFP4 bug in old quant. Daniel (Unsloth) confirmed bug fixed — new UD-Q4_K_XL shows KLD 0.0137 vs bartowski Q4_K_M's 0.0182. **Re-testing in Session 007 E4.**
 
 Previous model: Qwen3-Next-80B-A3B-Instruct (Q8_0, 84.8 GB, ~22 tok/s) — replaced in Session 005
 
@@ -54,7 +54,7 @@ Alternative (quality-first): Q8_0 + `--fit on` at ~40 tok/s (config C4r, require
 - Build flags: `-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_CUDA_FA_ALL_QUANTS=ON`
 - Build quirk: must symlink `libcuda.so.1` from CUDA stubs for Docker builds without GPU
 - **`LLAMA_CPP_REF` build arg**: pin llama.cpp to a specific commit/tag (e.g., `docker build --build-arg LLAMA_CPP_REF=b8149 .`). Unpinned builds caused 30% regression in Session 003/004.
-- Images: `llm-server/llama-cpp:latest` (HEAD), `llm-server/llama-cpp:latest-fit` (b8149, supports `--fit on`)
+- Images: `llm-server/llama-cpp:latest` (HEAD), `llm-server/llama-cpp:latest-fit` (b8149, supports `--fit on`), `llm-server/llama-cpp:latest-vision` (b8177+, for S007 E5 vision mode — not yet built)
 - Run with: `docker run --gpus all --ipc host`
 - Docker Compose: `docker compose --profile llama-cpp up`
 - NVIDIA Container Toolkit v1.18.2 injects `libcuda.so.1` at runtime via `--gpus all`
@@ -71,9 +71,10 @@ llama-server provides:
 - PCIe 5.0 bandwidth (~64 GB/s) is the bottleneck, not GPU compute
 - `--no-mmap` is important: loads entire model into RAM upfront for consistent offload performance
 - Thread count (`-t`) is tuned: **20 is optimal** (Session 004 sweep). U-shaped curve — t16 is worst, t8/t20/t24 are best tier
-- KV cache q8_0 is a free lunch: +12-38% throughput AND less VRAM with no quality impact (confirmed by PPL matrix, Session 006)
-- Q4_K_M preferred over UD-Q4_K_XL for MoE models (3.9x worse KLD, confirmed by KL divergence, Session 006)
-- Do NOT use `-b/-ub` batch flags with `--fit on` — they consume VRAM that `--fit` needs for expert layers (Session 006)
+- KV cache q8_0 is a free lunch at short context: < 0.4% PPL difference, +12-38% throughput (S006 E1, tested at 512 ctx). Community reports possible degradation at 40-100k tokens — **re-testing across context lengths in Session 007 E1**
+- Q4_K_M preferred over UD-Q4_K_XL for MoE models (S006 E2, 3.9x worse KLD). **However**: Daniel confirmed the old UD quant had a bug — fixed version under re-evaluation in Session 007 E4
+- Do NOT use `-b/-ub` batch flags with `--fit on` — they consume VRAM that `--fit` needs for expert layers (Session 006). **Caveat**: PP (prompt processing) speed impact never measured — being quantified in Session 007 E2
+- `--fit on` is CUDA-specific: Vulkan users report 2.5x slower (Corosus, 5070 Ti), ROCm users report 2.4x slower (Psyko38, RX 9060 XT). AMD/Vulkan users should use manual `--n-cpu-moe` instead
 
 ## Benchmark Results (Sessions 005-006 — Qwen3.5-35B-A3B)
 
@@ -99,10 +100,10 @@ Tested 2026-02-25 (S005), 2026-02-27 (S006). All configs: 20 threads, 65k ctx, `
 ### Key Findings
 
 - **KV cache q8_0 is a free lunch**: < 0.4% PPL difference, +12-38% throughput (confirmed by full PPL matrix, S006 E1)
-- **UD-Q4_K_XL is NOT recommended**: 3.9x worse KLD than Q4_K_M, only 86.2% same-top-1 vs 92.4% (S006 E2)
-- **`--fit on` without -b/-ub beats manual tuning**: 74.7 vs 69.6 tok/s, simpler config (S006 E4)
+- **UD-Q4_K_XL**: S006 showed 3.9x worse KLD (86.2% vs 92.4% same-top-1) — but caused by MXFP4 bug in old quant. Fixed version under re-evaluation (S007 E4)
+- **`--fit on` without -b/-ub beats manual tuning**: 74.7 vs 69.6 tok/s, simpler config (S006 E4). PP speed tradeoff being measured (S007 E2)
 - **Q4_K_L not worth the speed penalty**: -36% better KLD but 44% slower due to larger tensors (S006 E3)
-- **MXFP4_MOE not recommended**: marginal quality gain, 34-42% slower, memory leak in dequant path (S006 E7)
+- **MXFP4_MOE**: S006 showed 34-42% slower + memory leak. Community disputes this — KierkegaardsSisyphus claims 77 tok/s with `--fit-target 1500`. Re-testing (S007 E3)
 - **Qwen3.5-27B dense is 10x slower**: all 27B params active per token, worse PPL too (S006 E6)
 - **ngram self-speculation**: no benefit for conversational workloads, ngram-mod unstable (S006 E5)
 - **Partial offload is the key lever**: keeping expert layers on GPU is 36% faster than full CPU offload
@@ -132,24 +133,32 @@ Compare with: `python3 scripts/compare-results.py benchmarks/`
 - Thread sweep (Session 004) — **20 threads optimal**, +27% over t16
 - ik_llama.cpp fork (dropped — unstable, no speed advantage)
 - ktransformers (dropped — requires ~320GB RAM, exceeds 128GB)
-- Unsloth Dynamic quants (Session 003/005/006 — slower or worse quality than standard quants for MoE)
+- Unsloth Dynamic quants (Session 003/005/006 — old UD quants had MXFP4 bug, caused bad results)
 
-### Ready to Test (Medium Impact)
-- **Vision** — mmproj-BF16.gguf downloaded, needs smoke test with `--mmproj` flag
+### In Progress (Session 007) — Community Experiments
+- **E1: KV Cache Deep Dive** — PPL+KLD across context lengths (4k/8k/16k/32k) × KV configs (f16/q8_0/q4_0/asymmetric). Tests if "free lunch" holds at long context.
+- **E2: PP vs TG Tradeoff** — Prompt processing speed with/without `-b/-ub` batch flags. Quantifies the PP cost of fit-nobatch.
+- **E3: MXFP4 Redemption** — Re-test with `--fit-target 1500` (KierkegaardsSisyphus's config that claims 77 tok/s)
+- **E4: Fixed UD-Q4_K_XL** — Daniel confirmed MXFP4 bug fixed. New UD-Q4_K_XL shows KLD 0.0137 vs Q4_K_M's 0.0182 in his tests. Re-benchmarking.
+- **E5: Vision Mode** — `--mmproj` + `--fit-target 2000` + lmms-eval quality benchmarks (OCRBench, MMMU, MathVista, RealWorldQA, AI2D)
+- **E6: Community Notes** — Guidance for AMD/ROCm, Vulkan, 8GB VRAM, 24GB VRAM, LM Studio users
+
+New scripts: `bench-matrix.sh` (universal benchmark runner with PP+TG), `compare-matrix.py` (matrix comparison tool), `vision-eval.sh` (vision quality eval). All spec'd, implementation pending.
+
+### Ready to Test
 - **Thinking mode** — on by default in Qwen3.5, verify it works well with downstream apps
 - **Chat template** — community reports GGUF embedded template may be incomplete, test with explicit `--chat-template`
-- **Pin Docker image** to winning llama.cpp commit — prevent regressions on rebuild
+- **`--fuse-gate-up-exps`** — b8164 feature, ~12% PP speedup for MoE, requires re-quantizing the GGUF
 
 ### Future / Blocked
 - Expert caching (locality-based, LFU) — not in mainline llama.cpp, HOBBIT paper shows 10x potential but no public code
 - cuBLAS Grouped GEMM (CUDA 13.1 — up to 4x MoE speedup, needs llama.cpp support)
 - FP4 quantization via Blackwell's native Tensor Core support
-- KV cache q4_0 for longer contexts (frees VRAM for more experts on GPU)
 - Draft-model speculative decoding — blocked until small Qwen3.5 model (1-3B) is released
 
 ## Status
 
-**Production-ready.** Server achieves ~74 tok/s at Q4_K_M with 2.1% PPL loss. API is OpenAI-compatible. All quantization alternatives tested (Q4_K_L, MXFP4_MOE, UD-Q4_K_XL, 27B dense) — Q4_K_M remains best for single-GPU consumer hardware. Next step is downstream applications (classification, synthetic data, chatbot, agentic workflows).
+**Production-ready, active optimization.** Server achieves ~74 tok/s at Q4_K_M with 2.1% PPL loss. API is OpenAI-compatible. Session 007 (in progress) is re-evaluating several S006 conclusions based on community feedback: KV cache at long contexts, MXFP4 with `--fit-target`, fixed UD quants, PP speed tradeoffs, and vision mode. Reddit post received significant engagement — community provided counter-configs, AMD/Vulkan data, and Daniel (Unsloth) confirmed a bug in the old UD quants that invalidates our S006 E2 results.
 
 ## Research Documentation
 
@@ -168,3 +177,16 @@ See `docs/dev/006-community-followup/` for community follow-up experiments:
 - `success-criteria.md` — all 7 experiments with full results
 - `reddit-followup-post.md` — Reddit follow-up post draft
 - `reddit-replies.md` — individual reply drafts
+
+See `docs/dev/007-community-experiments/` for Session 007 (in progress):
+- `success-criteria.md` — 6 experiments: KV deep dive, PP/TG tradeoff, MXFP4 redemption, fixed UD-Q4_K_XL, vision, community notes
+- 14 config files in `configs/llama-cpp-s007-*.env`
+- New scripts: `bench-matrix.sh`, `compare-matrix.py`, `vision-eval.sh` (spec'd, implementation pending)
+
+### Daniel's Component Ablation Study
+
+Unsloth published 550+ GGUF variants with 120+ KLD evaluations at [unsloth/Qwen3.5-35B-A3B-Experiments-GGUF](https://huggingface.co/unsloth/Qwen3.5-35B-A3B-Experiments-GGUF). Key findings:
+- **Expert down projections** are the most sensitive component (5.1% PPL at iq2_xxs)
+- **tok, out, shr** can be aggressively quantized with minimal impact
+- **SSM pos3** and **attention pos4** are outlier-sensitive sub-components
+- Fixed UD-Q4_K_XL (19.2 GiB): KLD 0.0137, 94.7% same-top-p — better than bartowski Q4_K_M (19.8 GiB): KLD 0.0182, 94.2%

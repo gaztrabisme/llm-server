@@ -1,10 +1,11 @@
 services:
+  # Production: Qwen3.5-35B-A3B Q4_K_M + fit-nobatch (~74 tok/s)
   llama-cpp:
     profiles: ["llama-cpp"]
     build:
       context: .
       dockerfile: docker/Dockerfile.llama-cpp
-    image: llm-server/llama-cpp:latest
+    image: llm-server/llama-cpp:latest-fit
     ports:
       - "8080:8080"
     volumes:
@@ -16,19 +17,17 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    env_file: configs/llama-cpp-baseline.env
+    env_file: configs/llama-cpp-s006-e4-fit-nobatch.env
     ipc: host
     ulimits:
       memlock:
         soft: -1
         hard: -1
 
-  ik-llama:
-    profiles: ["ik-llama"]
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.ik-llama-cpp
-    image: llm-server/ik-llama-cpp:latest
+  # Vision: Q4_K_M + mmproj (requires latest-vision image built from b8177+)
+  llama-cpp-vision:
+    profiles: ["llama-cpp-vision"]
+    image: llm-server/llama-cpp:latest-vision
     ports:
       - "8080:8080"
     volumes:
@@ -40,7 +39,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    env_file: configs/ik-llama-baseline.env
+    env_file: configs/llama-cpp-s007-e5-vision.env
     ipc: host
     ulimits:
       memlock:

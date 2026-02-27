@@ -8,3 +8,4 @@
 | 004 | 2026-02-25 | Analyze | Speedup investigation: commit regression, speculative decoding, expert caching, thread sweep | Complete — 20 threads optimal (+27%), speculative decoding next |
 | 005 | 2026-02-25 | Build | Model migration: Qwen3-Next-80B-A3B → Qwen3.5-35B-A3B + partial MoE offload benchmark | Complete — Winner: Q4_K_M + `--n-cpu-moe 24` (~70 tok/s, 3.2x speedup) |
 | 006 | 2026-02-26 | Analyze | Community follow-up: 7 experiments (KV quality, KLD, Q4_K_L, fit-nobatch, spec decoding, 27B dense, MXFP4) | Complete — New winner: fit-nobatch ~74 tok/s, Q4_K_M confirmed best quant |
+| 007 | 2026-02-28 | Build | Community experiments: KV deep dive across context lengths, PP vs TG tradeoff, MXFP4 redemption (fit-target 1500), fixed UD-Q4_K_XL, vision mode, community hardware notes | In progress |

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Unified benchmark runner for llama.cpp and ik_llama.cpp
-# Usage: ./bench.sh <engine> <config> [thread_count]
+# Usage: ./bench.sh <engine> <config> [thread_count] [image_override]
 #   engine: llama-cpp | ik-llama
-#   config: baseline | optimized
+#   config: name matching configs/{engine}-{config}.env
 #   thread_count: optional override (default: from config)
 #
 # Examples:
 #   ./bench.sh llama-cpp baseline
+#   ./bench.sh llama-cpp s006-e4-fit-nobatch
 #   ./bench.sh ik-llama optimized 24
-#   ./bench.sh llama-cpp optimized 8
 
 set -euo pipefail
 
@@ -16,6 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BENCHMARK_DIR="$PROJECT_DIR/benchmarks"
 MODEL_DIR="$PROJECT_DIR/models"
+
+# Source shared library
+source "$SCRIPT_DIR/lib-bench-common.sh"
 
 ENGINE="${1:?Usage: bench.sh <engine> <config> [thread_count]}"
 CONFIG="${2:?Usage: bench.sh <engine> <config> [thread_count]}"
@@ -25,14 +28,12 @@ IMAGE_OVERRIDE="${4:-}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RESULT_FILE="$BENCHMARK_DIR/${ENGINE}-${CONFIG}-${TIMESTAMP}.json"
 
-# Map engine to docker compose profile and image
+# Map engine to docker image
 case "$ENGINE" in
     llama-cpp)
-        PROFILE="llama-cpp"
         IMAGE="llm-server/llama-cpp:latest"
         ;;
     ik-llama)
-        PROFILE="ik-llama"
         IMAGE="llm-server/ik-llama-cpp:latest"
         ;;
     *)
@@ -54,71 +55,17 @@ if [[ ! -f "$ENV_FILE" ]]; then
     exit 1
 fi
 
-# Model check moved to after env file parsing (dynamic path)
-
 echo "=========================================="
 echo " Benchmark: $ENGINE / $CONFIG"
 echo " Timestamp: $TIMESTAMP"
 echo "=========================================="
 
-# Parse extra args from env file (for ik-llama optimized)
-EXTRA_ARGS=""
-if grep -q "^IK_EXTRA_ARGS=" "$ENV_FILE" 2>/dev/null; then
-    EXTRA_ARGS=$(grep "^IK_EXTRA_ARGS=" "$ENV_FILE" | cut -d= -f2-)
-fi
-
-# Build server args from env file
-SERVER_ARGS=""
-DOCKER_ENV_ARGS=""
-MODEL_PATH=""
-while IFS='=' read -r key value; do
-    [[ -z "$key" || "$key" =~ ^# || "$key" == "IK_EXTRA_ARGS" ]] && continue
-    case "$key" in
-        LLAMA_ARG_MODEL)          SERVER_ARGS+=" -m $value"; MODEL_PATH="$value" ;;
-        LLAMA_ARG_CTX_SIZE)       SERVER_ARGS+=" -c $value" ;;
-        LLAMA_ARG_N_GPU_LAYERS)   SERVER_ARGS+=" -ngl $value" ;;
-        LLAMA_ARG_OVERRIDE_TENSOR) SERVER_ARGS+=" -ot $value" ;;
-        LLAMA_ARG_CPU_MOE)        [[ "$value" == "true" ]] && SERVER_ARGS+=" -cmoe" ;;
-        LLAMA_ARG_FLASH_ATTN)     [[ "$value" == "true" ]] && SERVER_ARGS+=" -fa on" ;;
-        LLAMA_ARG_THREADS)        SERVER_ARGS+=" -t ${THREAD_OVERRIDE:-$value}" ;;
-        LLAMA_ARG_BATCH_SIZE)     SERVER_ARGS+=" -b $value" ;;
-        LLAMA_ARG_UBATCH_SIZE)    SERVER_ARGS+=" -ub $value" ;;
-        LLAMA_ARG_NO_MMAP)        [[ "$value" == "true" ]] && SERVER_ARGS+=" --no-mmap" ;;
-        LLAMA_ARG_MLOCK)          [[ "$value" == "true" ]] && SERVER_ARGS+=" --mlock" ;;
-        LLAMA_ARG_JINJA)          [[ "$value" == "true" ]] && SERVER_ARGS+=" --jinja" ;;
-        LLAMA_ARG_HOST)           SERVER_ARGS+=" --host $value" ;;
-        LLAMA_ARG_PORT)           SERVER_ARGS+=" --port $value" ;;
-        LLAMA_ARG_CACHE_TYPE_K)   SERVER_ARGS+=" -ctk $value" ;;
-        LLAMA_ARG_CACHE_TYPE_V)   SERVER_ARGS+=" -ctv $value" ;;
-        LLAMA_ARG_SWA_FULL)       [[ "$value" == "true" ]] && SERVER_ARGS+=" --swa-full" ;;
-        LLAMA_ARG_N_CPU_MOE)      SERVER_ARGS+=" --n-cpu-moe $value" ;;
-        LLAMA_ARG_FIT)            [[ "$value" == "true" ]] && SERVER_ARGS+=" --fit on" ;;
-        LLAMA_ARG_FIT_TARGET)     SERVER_ARGS+=" --fit-target $value" ;;
-        LLAMA_ARG_MMPROJ)         SERVER_ARGS+=" --mmproj $value" ;;
-        LLAMA_ARG_SPEC_TYPE)      SERVER_ARGS+=" --spec-type $value" ;;
-        LLAMA_ARG_SPEC_NGRAM_N)   SERVER_ARGS+=" --spec-ngram-size-n $value" ;;
-        LLAMA_ARG_SPEC_NGRAM_M)   SERVER_ARGS+=" --spec-ngram-size-m $value" ;;
-        LLAMA_ARG_DRAFT_MAX)      SERVER_ARGS+=" --draft-max $value" ;;
-        LLAMA_ARG_DRAFT_MIN)      SERVER_ARGS+=" --draft-min $value" ;;
-        GGML_CUDA_GRAPH_OPT)     DOCKER_ENV_ARGS+=" -e GGML_CUDA_GRAPH_OPT=$value" ;;
-    esac
-done < "$ENV_FILE"
-
-SERVER_ARGS+=" $EXTRA_ARGS"
+# Parse env file using shared library
+parse_env_file "$ENV_FILE" "$THREAD_OVERRIDE"
 THREAD_COUNT="${THREAD_OVERRIDE:-20}"
 
-# Validate model file exists on host (map container path /models/... to host MODEL_DIR/...)
-if [[ -n "$MODEL_PATH" ]]; then
-    HOST_MODEL_PATH="${MODEL_DIR}/${MODEL_PATH#/models/}"
-    if [[ ! -f "$HOST_MODEL_PATH" ]]; then
-        echo "Model not found: $HOST_MODEL_PATH"
-        echo "Check LLAMA_ARG_MODEL in $ENV_FILE"
-        exit 1
-    fi
-else
-    echo "No LLAMA_ARG_MODEL in $ENV_FILE"
-    exit 1
-fi
+# Validate model
+validate_model "$MODEL_PATH" "$MODEL_DIR" "$ENV_FILE"
 
 CONTAINER_NAME="llm-bench-${ENGINE}-${CONFIG}-$$"
 
@@ -127,39 +74,20 @@ echo "Starting server container: $CONTAINER_NAME"
 echo "Args: $SERVER_ARGS"
 echo ""
 
-# Start server in background
-docker run -d \
-    --name "$CONTAINER_NAME" \
-    --gpus all \
-    --ipc host \
-    -v "$MODEL_DIR:/models:ro" \
-    -p 8080:8080 \
-    $DOCKER_ENV_ARGS \
-    "$IMAGE" \
-    $SERVER_ARGS
+# Start server
+start_server "$CONTAINER_NAME" "$IMAGE" "$MODEL_DIR" "$DOCKER_ENV_ARGS"
 
-# Wait for server health
-echo "Waiting for server to be ready..."
-MAX_WAIT=600  # 10 minutes (model loading takes a while for 84.8 GB)
-WAITED=0
-while ! curl -sf http://localhost:8080/health > /dev/null 2>&1; do
-    sleep 5
-    WAITED=$((WAITED + 5))
-    if [[ $WAITED -ge $MAX_WAIT ]]; then
-        echo "Server did not become healthy within ${MAX_WAIT}s"
-        docker logs "$CONTAINER_NAME" 2>&1 | tail -20
-        docker rm -f "$CONTAINER_NAME" > /dev/null 2>&1
-        exit 1
-    fi
-    printf "\r  Waiting... %ds / %ds" "$WAITED" "$MAX_WAIT"
-done
-echo ""
-echo "Server healthy!"
+# Wait for health (with container log dump on failure)
+if ! wait_for_health "http://localhost:8080"; then
+    docker logs "$CONTAINER_NAME" 2>&1 | tail -20
+    docker rm -f "$CONTAINER_NAME" > /dev/null 2>&1
+    exit 1
+fi
 
 # Capture VRAM usage
 echo ""
 echo "--- GPU Stats ---"
-VRAM_INFO=$(nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null || echo "N/A")
+VRAM_INFO=$(capture_vram)
 echo "VRAM: $VRAM_INFO"
 
 # Initialize result JSON
@@ -356,7 +284,7 @@ with open('$RESULT_FILE', 'w') as f:
 PYEOF
 
 # Capture final GPU stats
-FINAL_VRAM=$(nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null || echo "N/A")
+FINAL_VRAM=$(capture_vram)
 python3 -c "
 import json
 with open('$RESULT_FILE', 'r') as f:
