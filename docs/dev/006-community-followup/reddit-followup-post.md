@@ -10,7 +10,7 @@ After posting [Qwen3.5-35B-A3B quantization quality + speed benchmarks on RTX 50
 
 **Hardware**: RTX 5080 16GB + 128GB DDR5 + Ryzen 9 9950X (32 threads)
 **Software**: llama.cpp (built from source, CUDA 12.8, sm_120)
-**Base model**: Qwen3.5-35B-A3B (MoE: 256 experts/layer, top-4, ~3B active params/token)
+**Base model**: Qwen3.5-35B-A3B (MoE: 256 experts/layer, top-8 + 1 shared, ~3B active params/token)
 
 ---
 

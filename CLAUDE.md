@@ -16,7 +16,7 @@ Run large Mixture-of-Experts models locally and serve them via API for other pro
 ## Primary Model
 
 **Qwen3.5-35B-A3B** — production quant: **Q4_K_M** (~20 GB), reference quant: Q8_0 (36.9 GB)
-- MoE: 128 routed experts per layer, 40 MoE layers, top-4 routing, ~3B active params per token
+- MoE: 256 experts per layer, top-8 routing + 1 shared expert (9 active), 40 MoE layers, ~3B active params per token
 - 65536 context length, thinking mode enabled by default
 - WikiText-2 PPL: Q8_0 = 6.5342, Q4_K_M = 6.6688 (+2.1% — negligible quality loss)
 - UD-Q4_K_XL NOT recommended: PPL 7.1702 (+9.7%, worse than standard Q4_K_M)

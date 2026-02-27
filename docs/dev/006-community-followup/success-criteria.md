@@ -183,7 +183,7 @@ Organized by upvotes/demand. Priorities updated after danielhanchen (Unsloth cre
 | PPL | 6.6688 | 6.8573 (+2.8%) |
 | Active params/token | ~3B | 27B |
 | File size | 20 GB | 15.6 GB |
-| Architecture | MoE (256 experts, top-4) | Dense |
+| Architecture | MoE (256 experts, top-8 + 1 shared) | Dense |
 
 **Speed Results** (--fit on, latest-fit image, 8k context):
 
