@@ -36,8 +36,8 @@ Organized by upvotes/demand. Priorities updated after danielhanchen (Unsloth cre
 
 | Quant | Mean KLD | Max KLD | Same Top % |
 |-------|----------|---------|-----------|
-| Q4_K_M | 0.0282 | 0.1912 | 92.4% |
-| UD-Q4_K_XL | 0.1087 | 1.2175 | 86.2% |
+| Q4_K_M | 0.0282 | 4.2146 | 92.4% |
+| UD-Q4_K_XL | 0.1087 | 7.7947 | 86.2% |
 
 **Conclusion**: KLD confirms and amplifies the PPL findings. UD-Q4_K_XL is 3.9x worse than Q4_K_M by mean KLD and preserves top-1 token only 86.2% vs 92.4%. PPL was not misleading — it correctly ranked the quants, but KLD shows the gap is even larger than PPL suggested.
 
@@ -99,7 +99,7 @@ Organized by upvotes/demand. Priorities updated after danielhanchen (Unsloth cre
 | Config | Short (tok/s) | Medium (tok/s) | Long (tok/s) | Multi-turn (tok/s) | Status |
 |--------|--------------|----------------|-------------|-------------------|--------|
 | fit-nobatch (latest-fit) | 74.7 | 72.9 | 73.7 | 76.1 | baseline |
-| ngram-simple | 44.9 | 43.4 | 42.4 | 51.3 | works |
+| ngram-simple | 44.9 | 43.4 | 42.9 | 49.1 | works |
 | ngram-mod (m=64) | 44.6 | FAIL | FAIL | FAIL | crashed |
 | ngram-simple-short (n=8, m=64) | 45.0 | 43.1 | 43.1 | FAIL | partial |
 
@@ -119,8 +119,8 @@ Organized by upvotes/demand. Priorities updated after danielhanchen (Unsloth cre
 
 | Metric | Q4_K_M | MXFP4_MOE | UD-Q4_K_XL |
 |--------|--------|-----------|-----------|
-| PPL (40 chunks) | ~6.00 | 5.96 | ~7.17 |
-| KLD (31 chunks) | 0.028 | 0.037 | 0.109 |
+| PPL (40 chunks) | ~6.00 | ~5.9-6.2* | ~7.17 |
+| KLD (31 chunks) | 0.028 | 0.050 | 0.109 |
 | Same top % | 92.4% | 91.0% | 86.2% |
 | File size | 21.2 GB | 18.4 GB | 19.8 GB |
 
@@ -129,7 +129,7 @@ Organized by upvotes/demand. Priorities updated after danielhanchen (Unsloth cre
 | Config | Short (tok/s) | Medium (tok/s) | Long (tok/s) | Multi-turn (tok/s) | VRAM (MB) |
 |--------|--------------|----------------|-------------|-------------------|-----------|
 | Q4_K_M fit-nobatch | 74.7 | 72.9 | 73.7 | 76.1 | 14559 |
-| **MXFP4_MOE fit-nobatch** | **49.5** | **47.8** | **46.9** | **44.1** | **14531** |
+| **MXFP4_MOE fit-nobatch** | **49.5** | **47.8** | **46.9** | **43.0** | **14531** |
 
 **Issues encountered**:
 - PPL/KLD crash with SIGKILL (exit 137) after 40-50 chunks — memory leak in MXFP4 dequantization path. Workaround: `--chunks 40`

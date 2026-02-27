@@ -39,8 +39,8 @@ u/JermMX5 cited the ["Accuracy is Not All You Need" paper](https://arxiv.org/abs
 
 | Quant | Mean KLD | Max KLD | Same Top-1 Token % |
 |-------|----------|---------|--------------------|
-| Q4_K_M | 0.0282 | 0.1912 | 92.4% |
-| UD-Q4_K_XL | 0.1087 | 1.2175 | 86.2% |
+| Q4_K_M | 0.0282 | 4.2146 | 92.4% |
+| UD-Q4_K_XL | 0.1087 | 7.7947 | 86.2% |
 
 **Verdict**: KLD *confirms and amplifies* the PPL findings. UD-Q4_K_XL is **3.9x worse** than Q4_K_M by mean KLD and only preserves the top-1 token 86.2% of the time (vs 92.4%). PPL was not misleading here — it correctly ranked the quants, but KLD shows the gap is even larger than PPL suggested.
 
@@ -104,7 +104,7 @@ In my original post, `--fit on` was ~7% slower than manual `--n-cpu-moe 24`. u/C
 | Config | Short | Medium | Long | Multi-turn | Status |
 |--------|-------|--------|------|------------|--------|
 | fit-nobatch baseline | 74.7 tok/s | 72.9 | 73.7 | 76.1 | — |
-| ngram-simple | 44.9 | 43.4 | 42.4 | 51.3 | works |
+| ngram-simple | 44.9 | 43.4 | 42.9 | 49.1 | works |
 | ngram-mod (m=64) | 44.6 | FAIL | FAIL | FAIL | crashes |
 | ngram-simple-short (n=8, m=64) | 45.0 | 43.1 | 43.1 | FAIL | partial |
 
@@ -149,8 +149,8 @@ After u/danielhanchen confirmed UD-Q4_K_XL has issues and specifically recommend
 
 | Metric | Q4_K_M | MXFP4_MOE | UD-Q4_K_XL |
 |--------|--------|-----------|------------|
-| PPL (~40 chunks) | ~6.00 | 5.96 | ~7.17 |
-| Mean KLD (31 chunks) | 0.028 | 0.037 | 0.109 |
+| PPL (~40 chunks) | ~6.00 | ~5.9-6.2* | ~7.17 |
+| Mean KLD (31 chunks) | 0.028 | 0.050 | 0.109 |
 | Same top-1 % | 92.4% | 91.0% | 86.2% |
 | File size | 21.2 GB | 18.4 GB | 19.8 GB |
 
@@ -159,9 +159,9 @@ After u/danielhanchen confirmed UD-Q4_K_XL has issues and specifically recommend
 | Config | Short | Medium | Long | Multi-turn | VRAM |
 |--------|-------|--------|------|------------|------|
 | Q4_K_M fit-nobatch | 74.7 tok/s | 72.9 | 73.7 | 76.1 | 14559 MB |
-| **MXFP4_MOE fit-nobatch** | **49.5 tok/s** | **47.8** | **46.9** | **44.1** | **14531 MB** |
+| **MXFP4_MOE fit-nobatch** | **49.5 tok/s** | **47.8** | **46.9** | **43.0** | **14531 MB** |
 
-**Verdict**: MXFP4_MOE has marginally better PPL than Q4_K_M (5.96 vs 6.00) but is **34-42% slower** (~47 tok/s vs ~74 tok/s). Despite the smaller file size (18.4 vs 21.2 GB), it doesn't translate to more expert layers on GPU — VRAM usage is nearly identical. There's also a memory leak bug in the MXFP4 dequant path that prevents full perplexity evaluation. **Not recommended over Q4_K_M** — the quality gain is marginal while the speed loss is massive.
+**Verdict**: MXFP4_MOE has comparable PPL to Q4_K_M (~5.9-6.2 vs 6.00, though partial evaluation due to memory leak) but is **34-42% slower** (~47 tok/s vs ~74 tok/s). Despite the smaller file size (18.4 vs 21.2 GB), it doesn't translate to more expert layers on GPU — VRAM usage is nearly identical. There's also a memory leak bug in the MXFP4 dequant path that prevents full perplexity evaluation. **Not recommended over Q4_K_M** — the quality gain is marginal while the speed loss is massive.
 
 u/danielhanchen — if the Unsloth team has different results on MXFP4 speed, I'd love to compare notes. My build is llama.cpp b8149 with CUDA 12.8 on sm_120.
 

@@ -107,7 +107,7 @@ WikiText-2 perplexity and KL divergence vs Q8_0 reference:
 | Q8_0 (reference) | 6.5342 | — | — | — |
 | **Q4_K_M** | **6.6688** | **+2.1%** | **0.028** | **92.4%** |
 | Q4_K_L (bartowski) | 6.6125 | +1.2% | 0.018 | 94.2% |
-| MXFP4_MOE | ~5.96 | ~-0.6%* | 0.037 | 91.0% |
+| MXFP4_MOE | ~5.9-6.2* | ~-0.6%* | 0.050 | 91.0% |
 | UD-Q4_K_XL | 7.1702 | +9.7% | 0.109 | 86.2% |
 
 *Partial evaluation (40 chunks) due to memory leak in MXFP4 dequant path.
