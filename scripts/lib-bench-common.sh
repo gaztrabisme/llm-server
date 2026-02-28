@@ -66,6 +66,7 @@ parse_env_file() {
             LLAMA_ARG_N_CPU_MOE)      SERVER_ARGS+=" --n-cpu-moe $value" ;;
             LLAMA_ARG_FIT)            [[ "$value" == "true" ]] && SERVER_ARGS+=" --fit on" ;;
             LLAMA_ARG_FIT_TARGET)     SERVER_ARGS+=" --fit-target $value" ;;
+            LLAMA_ARG_NO_KV_OFFLOAD)  [[ "$value" == "true" ]] && SERVER_ARGS+=" --no-kv-offload" ;;
             LLAMA_ARG_MMPROJ)         SERVER_ARGS+=" --mmproj $value" ;;
             LLAMA_ARG_SPEC_TYPE)      SERVER_ARGS+=" --spec-type $value" ;;
             LLAMA_ARG_SPEC_NGRAM_N)   SERVER_ARGS+=" --spec-ngram-size-n $value" ;;

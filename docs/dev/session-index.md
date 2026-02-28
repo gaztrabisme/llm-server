@@ -9,3 +9,4 @@
 | 005 | 2026-02-25 | Build | Model migration: Qwen3-Next-80B-A3B → Qwen3.5-35B-A3B + partial MoE offload benchmark | Complete — Winner: Q4_K_M + `--n-cpu-moe 24` (~70 tok/s, 3.2x speedup) |
 | 006 | 2026-02-26 | Analyze | Community follow-up: 7 experiments (KV quality, KLD, Q4_K_L, fit-nobatch, spec decoding, 27B dense, MXFP4) | Complete — New winner: fit-nobatch ~74 tok/s, Q4_K_M confirmed best quant |
 | 007 | 2026-02-28 | Build | Community experiments: KV deep dive (free lunch confirmed 4k-32k), PP/TG tradeoff (no-batch wins), MXFP4 (max 52 tok/s not 77), UD-Q4_K_XL (best Q4 quant), vision mode (works, -33% TG), community notes | Complete — UD-Q4_K_XL new best quant, KV q8_0 confirmed across contexts |
+| 008 | 2026-02-28 | Build | Extended validation: context scaling (65k-262k), config flags, real-world evals (4 quants × 6 benchmarks), AesSedai Q4_K_M | In Progress |
