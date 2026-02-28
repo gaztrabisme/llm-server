@@ -56,19 +56,36 @@
 
 ## Phase C: Real-World Evals
 
-**Benchmarks** (--limit 500, 0-shot, local-completions API):
-- ARC-Challenge: science reasoning (loglikelihood, 500 of 1172)
-- HellaSwag: commonsense reasoning (loglikelihood, 500 of 10042)
-- GPQA: graduate-level QA (loglikelihood, 448 full)
-- Winogrande: commonsense (loglikelihood, 500 of 1267)
-- GSM8K: math reasoning (generate_until, 100 of 1319)
+### CRITICAL BUG: llama.cpp doesn't support echo=true for prompt logprobs
 
-| Quant | ARC-C (acc_norm) | HellaSwag (acc_norm) | GPQA (acc) | Winogrande (acc) | GSM8K (em) |
-|-------|-----------------|---------------------|-----------|-----------------|-----------|
-| Q8_0 (ceiling) | | | | | |
-| UD-Q4_K_XL | | | | | |
-| Q4_K_M (bartowski) | | | | | |
-| AesSedai Q4_K_M | | | | | |
+**Root cause**: lm-eval's `local-completions` sends `echo=true` to get logprobs for input tokens, but llama.cpp's `/v1/completions` ignores the `echo` parameter. The `logprobs.content[]` array only contains generated token logprobs, never echoed input logprobs. As a result:
+- `content[ctxlen:-1]` is always empty (ctxlen > 0, content has only 1 entry)
+- All answer choices get logprob=0 → random chance scores
+- All loglikelihood benchmarks produce **identical scores across all quants** at random chance levels
+
+**Evidence**: ARC=0.234, HellaSwag=0.264, GPQA=0.246, Winogrande=0.496 — all identical across Q8_0, UD-Q4_K_XL, Q4_K_M. Only GSM8K (generation) showed real variation (0.59/0.65/0.73).
+
+**Impact**: loglikelihood, loglikelihood_rolling, and multiple_choice task types are ALL broken with llama.cpp's API. Only `generate_until` tasks produce valid results.
+
+**No fix available**: llama.cpp does not support `prompt_logprobs`, `echo`, or any mechanism to return logprobs for input tokens. Would require a different server (vLLM, SGLang) or a llama.cpp code change.
+
+### Generation-Only Benchmarks (v2)
+
+Switched to generation-only approach (--limit 200, 0-shot, local-completions API):
+- GPQA: graduate-level QA (generate_until, flexible-extract for answer letter)
+- GSM8K: math reasoning (generate_until, flexible-extract for numerical answer)
+
+Dropped from plan:
+- ARC-Challenge (loglikelihood — broken), arc_challenge_chat ("." stop sequence fires immediately), arc_challenge_llama (model generates `<think>` tags, never reaches answer in 100 tokens)
+- HellaSwag (loglikelihood only — no generation variant exists)
+- Winogrande (loglikelihood only — no generation variant exists)
+
+| Quant | GPQA (em, flex) | GSM8K (em, flex) |
+|-------|----------------|-----------------|
+| Q8_0 (ceiling) | (running) | (running) |
+| UD-Q4_K_XL | (running) | (running) |
+| Q4_K_M (bartowski) | (running) | (running) |
+| AesSedai Q4_K_M | (running) | (running) |
 
 ## Phase D: AesSedai Three-Way Comparison
 
@@ -101,9 +118,22 @@
 4. **--limit 500 for large benchmarks (C)**: Full HellaSwag (10k) and Winogrande (1.3k) subsampled to 500. ARC-Challenge (1172) and GPQA (448) run near-full. GSM8K limited to 100 (generation is slow).
 5. **lm-eval logprobs format patch (C)**: llama.cpp returns logprobs in new OpenAI format (`content[{token, logprob}]`), but lm-eval expected old format (`token_logprobs[]`). Patched `.venv/.../openai_completions.py:parse_logprobs()` to handle both formats via format detection.
 
+## Revisions (continued)
+
+6. **Loglikelihood benchmarks ALL invalid (C)**: llama.cpp doesn't support `echo=true` for prompt logprobs. All loglikelihood scores are identical at random chance across all quants. This is a fundamental limitation of llama.cpp's `/v1/completions` endpoint. Switched to generation-only benchmarks.
+7. **ARC-Challenge dropped (C)**: `arc_challenge_chat` has stop sequence `"."` that fires immediately with text completions. `arc_challenge_llama` works but model generates `<think>` tags that consume all 100 max_gen_toks without reaching the answer. No viable generation variant for text completions API.
+8. **HellaSwag, Winogrande dropped (C)**: No generation-based variants exist in lm-eval. These tasks are loglikelihood-only.
+9. **local-chat-completions 400 error (C)**: Chat completions endpoint with `--apply_chat_template` returns 400 for some tasks. When it works, thinking mode puts answers in `reasoning_content` field which lm-eval doesn't read (only reads `message.content`). Content is empty for most responses.
+10. **Final benchmark set (C)**: GPQA generative (works, verified 2/5 correct on sanity check) + GSM8K (works, showed real variation 0.59/0.65/0.73 across quants). Limit increased to 200 per task.
+
 ## Attempts
 | # | Phase | Approach | Result | What changed |
 |---|-------|----------|--------|--------------|
 | 1 | C | local-chat-completions model type | Failed: loglikelihood not supported for chat completions | Switched to local-completions |
 | 2 | C | local-completions model type | Failed: KeyError 'token_logprobs' — llama.cpp uses new logprobs format | Patched parse_logprobs() |
-| 3 | C | Patched local-completions | Success: all 6 benchmarks pass sanity check | Running full evals |
+| 3 | C | Patched local-completions, loglikelihood tasks | Failed: ALL scores identical at random chance — echo=true not supported | Root cause: llama.cpp ignores echo, content[] has only generated tokens |
+| 4 | C | local-chat-completions + --apply_chat_template | Failed: 400 Bad Request and/or empty content (thinking mode) | Chat completions not viable for eval |
+| 5 | C | local-completions + arc_challenge_chat | Failed: stop sequence "." fires immediately | Dropped ARC chat variant |
+| 6 | C | local-completions + arc_challenge_llama | Failed: model generates `<think>` tags, 100 tokens exhausted before answer | Dropped ARC llama variant |
+| 7 | C | local-completions + gpqa_main_generative_n_shot | **Success**: 2/5 on sanity check, model outputs "(A)", "(B)" directly | Using for full eval |
+| 8 | C | local-completions + gsm8k (v2, limit 200) | **Success**: generation works, scores vary across quants | Using for full eval |
