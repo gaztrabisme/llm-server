@@ -94,6 +94,15 @@ Dropped from plan:
 3. **Different quants produce different-length thinking chains** due to quantization noise affecting token probabilities. Q8_0 may produce longer, more elaborate chains that get truncated more often.
 4. **Temperature=0 + text completion mode**: The model's behavior is deterministic per-quant but varies across quants in unpredictable ways (thinking vs no-thinking, chain length, format).
 
+**Confirmation experiment** (GSM8K, 20 samples, 0-shot):
+
+| Quant | max_gen_toks=256 | max_gen_toks=2048 | Change |
+|-------|-----------------|-------------------|--------|
+| Q8_0 | 0.50 ± 0.115 | 0.75 ± 0.099 | **+50%** |
+| Q4_K_M | 0.70 ± 0.105 | 0.80 ± 0.092 | +14% |
+
+Q8_0 improves dramatically (+50%) with more token budget, confirming its thinking chains were being truncated at 256 tokens. Q4_K_M improves less (+14%) because it already generates shorter chains. With 2048 tokens, both quants converge to ~0.75-0.80 (within error bars).
+
 **Conclusion**: Generation-based evals with thinking models and limited max_gen_toks are not reliable proxies for quantization quality. PPL and KLD remain the best metrics for comparing quants. The scores above measure "how well does the model format its answer within 256 tokens" rather than "how good is the model's reasoning".
 
 ## Phase D: AesSedai Three-Way Comparison
@@ -134,6 +143,7 @@ Dropped from plan:
 8. **HellaSwag, Winogrande dropped (C)**: No generation-based variants exist in lm-eval. These tasks are loglikelihood-only.
 9. **local-chat-completions 400 error (C)**: Chat completions endpoint with `--apply_chat_template` returns 400 for some tasks. When it works, thinking mode puts answers in `reasoning_content` field which lm-eval doesn't read (only reads `message.content`). Content is empty for most responses.
 10. **Final benchmark set (C)**: GPQA generative (works, verified 2/5 correct on sanity check) + GSM8K (works, showed real variation 0.59/0.65/0.73 across quants). Limit increased to 200 per task.
+11. **Generation evals unreliable for quant comparison (C)**: All Q4 quants outscore Q8_0 due to max_gen_toks=256 truncating thinking chains. Confirmed via experiment: Q8_0 GSM8K jumps 0.50→0.75 at max_gen_toks=2048. PPL/KLD remain the reliable proxy for quantization quality.
 
 ## Attempts
 | # | Phase | Approach | Result | What changed |
@@ -146,6 +156,8 @@ Dropped from plan:
 | 6 | C | local-completions + arc_challenge_llama | Failed: model generates `<think>` tags, 100 tokens exhausted before answer | Dropped ARC llama variant |
 | 7 | C | local-completions + gpqa_main_generative_n_shot | **Success**: 2/5 on sanity check, model outputs "(A)", "(B)" directly | Using for full eval |
 | 8 | C | local-completions + gsm8k (v2, limit 200) | **Success**: generation works, scores vary across quants | Using for full eval |
+| 9 | C | Full gen-v2 suite (4 quants × GPQA+GSM8K, limit 200) | **Completed** but results unreliable: all Q4 quants outscore Q8_0 | Thinking chain truncation at max_gen_toks=256 |
+| 10 | C | max_gen_toks=2048 experiment (Q8_0 + Q4_K_M, 20 samples) | **Confirmed**: Q8_0 jumps from 0.50→0.75 (+50%), Q4_K_M only 0.70→0.80 (+14%) | Thinking chain length is the confound, not model quality |
 
 ## Future Improvements (Brainstormed)
 
