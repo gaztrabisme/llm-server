@@ -100,8 +100,11 @@ Tested 2026-02-25 (S005), 2026-02-27 (S006). All configs: 20 threads, 65k ctx, `
 
 ### Key Findings
 
-- **KV cache q8_0 is a confirmed free lunch**: PPL delta < 0.3%, KLD < 0.019, holds across all context lengths 4k-32k (S006 E1, S007 E1)
+- **KV cache q8_0 is a confirmed free lunch**: PPL delta < 0.3%, KLD < 0.019, holds across all context lengths 4k-262k (S006 E1, S007 E1, S008 Phase A). Extended to 65k (delta -0.11%) and 128k (delta -0.13%). 262k works fine on 16GB but WikiText-2 too small for PPL measurement
 - **UD-Q4_K_XL (FIXED) beats Q4_K_M**: KLD 0.0145 vs 0.0286, same-top-p 94.46% vs 92.46%, PPL 6.5959 vs 6.6688. Recommend as production quant. (S007 E4)
+- **AesSedai Q4_K_M is the best Q4 quant by quality**: KLD 0.0095, same-top-p 95.74%, PPL 6.3949. Confirmed bobaburger's claim. ~44 tok/s (same as UD-Q4_K_XL, both ~40% slower than bartowski Q4_K_M). (S008 Phase D)
+- **`--no-kv-offload` is harmful**: -63% TG (16.1 vs 42.7 tok/s). Do not use. (S008 Phase B)
+- **PP scales well at extended context**: 1390→1784 tok/s from 512→16k tokens (+28%), plateaus 16k-32k, slight decline at 63k (-5% from peak). (S008 Phase B)
 - **`--fit on` without -b/-ub beats all configs**: 74.7 vs 69.6 tok/s, and batch flags don't help PP at short prompts (S006 E4, S007 E2)
 - **Q4_K_L not worth the speed penalty**: -36% better KLD but 44% slower due to larger tensors (S006 E3)
 - **MXFP4_MOE max 52.4 tok/s** (not 77 tok/s claimed): fit-target 1500 reduces VRAM for experts, hurting TG. Better PP than Q4_K_M due to smaller model. (S006, S007 E3)
@@ -141,8 +144,12 @@ Compare with: `python3 scripts/compare-results.py benchmarks/`
 - **Fixed UD-Q4_K_XL validation** (Session 007 E4) — KLD 0.0145 vs Q4_K_M 0.0286. Better quality, same speed. New best Q4-class quant
 - **Vision mode evaluation** (Session 007 E5) — works with --mmproj, 49.5 tok/s TG (33% slower due to fit-target 2000), minimal VRAM overhead (~114 MB). lmms-eval quality benchmarks blocked by v0.6.1 task registration issue
 - **Community notes** (Session 007 E6) — AMD/ROCm, Vulkan, 8GB/24GB VRAM, LM Studio guidance
+- **Extended context KV quality** (Session 008 Phase A) — PPL at 65k/128k/262k, KV q8_0 free lunch confirmed (delta -0.11% at 65k, -0.13% at 128k). TG ~42-45 tok/s across all contexts. 262k loads on 16GB GPU (no OOM)
+- **Config flags** (Session 008 Phase B) — `--no-kv-offload` = -63% TG, never use. `-ub 1024 -b 2048` = TG -3.5%/PP-1024 +22%, not recommended. PP scales 1390→1784 tok/s at 512→16k tokens
+- **AesSedai Q4_K_M** (Session 008 Phase D) — PPL 6.3949, KLD 0.0095, same-top-p 95.74%. Best quality Q4 quant. ~44 tok/s (same speed class as UD-Q4_K_XL)
+- **lm-eval-harness evaluation** (Session 008 Phase C) — llama.cpp doesn't support `echo=true`, breaking all loglikelihood benchmarks (ARC, HellaSwag, MMLU-Pro, Winogrande). Generation-only benchmarks (GPQA, GSM8K) work but are unreliable for quant comparison due to thinking chain truncation at max_gen_toks=256. PPL/KLD confirmed as better proxy than task evals for quant quality
 
-New scripts: `bench-matrix.sh` (universal benchmark runner with PP+TG), `compare-matrix.py` (matrix comparison tool), `vision-eval.sh` (vision quality eval). Shared bench library: `lib-bench-common.sh` (env parsing, Docker lifecycle, VRAM capture).
+New scripts: `bench-matrix.sh` (universal benchmark runner with PP+TG), `compare-matrix.py` (matrix comparison tool), `vision-eval.sh` (vision quality eval), `run-eval-suite.sh` (lm-eval-harness generation suite). Shared bench library: `lib-bench-common.sh` (env parsing, Docker lifecycle, VRAM capture).
 
 ### Ready to Test
 - **Thinking mode** — on by default in Qwen3.5, verify it works well with downstream apps
@@ -157,7 +164,7 @@ New scripts: `bench-matrix.sh` (universal benchmark runner with PP+TG), `compare
 
 ## Status
 
-**Production-ready.** Server achieves ~74 tok/s at Q4_K_M with 2.1% PPL loss. API is OpenAI-compatible. Session 007 completed 6 community-requested experiments: confirmed KV q8_0 free lunch across all context lengths (4k-32k), validated fixed UD-Q4_K_XL as best Q4-class quant (KLD 0.0145 vs Q4_K_M 0.0286), debunked 77 tok/s MXFP4 claim (max 52.4), confirmed no-batch as optimal for all workloads, demonstrated vision mode (49.5 tok/s, works but 33% TG penalty), and documented guidance for AMD/ROCm/Vulkan/varying VRAM users. Vision quality benchmarks (lmms-eval) blocked by v0.6.1 packaging issue.
+**Production-ready.** Server achieves ~74 tok/s at Q4_K_M with 2.1% PPL loss. API is OpenAI-compatible. Session 008 extended validation: KV q8_0 free lunch confirmed at 65k-262k context (delta < 0.13%), full 262k native context works on 16GB GPU, AesSedai Q4_K_M verified as highest quality Q4 quant (KLD 0.0095), `--no-kv-offload` shown harmful (-63% TG), and lm-eval-harness attempted but generation-based evals unreliable for quant comparison with thinking models (max_gen_toks truncation). PPL/KLD remain the gold standard for quant quality assessment.
 
 ## Research Documentation
 
@@ -183,6 +190,13 @@ See `docs/dev/007-community-experiments/` for Session 007 (complete):
 - `community-notes.md` — AMD/ROCm, Vulkan, 8GB/24GB VRAM, LM Studio guidance
 - 14 config files in `configs/llama-cpp-s007-*.env`
 - Scripts: `bench-matrix.sh`, `compare-matrix.py`, `vision-eval.sh`, `lib-bench-common.sh`
+
+See `docs/dev/008-extended-validation/` for Session 008 (in progress):
+- `success-criteria.md` — Phases A-D complete, Phase E pending
+- `progress-checkpoint.md` — extended context results, config flags, lm-eval findings, AesSedai comparison
+- 7 benchmark JSON files in `benchmarks/matrix/s008-*.json`
+- Eval results in `benchmarks/evals/gen-v2/` (GPQA + GSM8K, 4 quants)
+- Script: `run-eval-suite.sh` (lm-eval-harness generation benchmarks)
 
 ### Daniel's Component Ablation Study
 
