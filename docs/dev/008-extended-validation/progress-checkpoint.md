@@ -82,10 +82,19 @@ Dropped from plan:
 
 | Quant | GPQA (em, flex) | GSM8K (em, flex) |
 |-------|----------------|-----------------|
-| Q8_0 (ceiling) | (running) | (running) |
-| UD-Q4_K_XL | (running) | (running) |
-| Q4_K_M (bartowski) | (running) | (running) |
-| AesSedai Q4_K_M | (running) | (running) |
+| Q8_0 (ceiling) | 0.415 ± 0.035 | 0.570 ± 0.035 |
+| UD-Q4_K_XL | 0.450 ± 0.035 | 0.670 ± 0.033 |
+| Q4_K_M (bartowski) | 0.430 ± 0.035 | 0.735 ± 0.031 |
+| AesSedai Q4_K_M | 0.430 ± 0.035 | 0.670 ± 0.033 |
+
+**IMPORTANT: These results are unreliable for quant comparison.** All Q4 quants score higher than Q8_0 (the near-lossless ceiling), which is theoretically impossible. Root cause analysis:
+
+1. **max_gen_toks=256** (lm-eval default) is too small for thinking models. Qwen3.5 generates `<think>` tags in text completion mode, consuming token budget before producing the answer.
+2. **flexible-extract takes the LAST number** in the output. With truncated thinking chains, the "last number" may be an intermediate calculation, not the final answer.
+3. **Different quants produce different-length thinking chains** due to quantization noise affecting token probabilities. Q8_0 may produce longer, more elaborate chains that get truncated more often.
+4. **Temperature=0 + text completion mode**: The model's behavior is deterministic per-quant but varies across quants in unpredictable ways (thinking vs no-thinking, chain length, format).
+
+**Conclusion**: Generation-based evals with thinking models and limited max_gen_toks are not reliable proxies for quantization quality. PPL and KLD remain the best metrics for comparing quants. The scores above measure "how well does the model format its answer within 256 tokens" rather than "how good is the model's reasoning".
 
 ## Phase D: AesSedai Three-Way Comparison
 

@@ -26,11 +26,12 @@
 - [DROPPED] MMLU-Pro, HumanEval, MBPP: generation-based but impractical (~50s/request with thinking mode)
 - [DROPPED] ARC-Challenge generative variants: arc_challenge_chat (stop "." fires immediately), arc_challenge_llama (`<think>` tags exhaust max_gen_toks)
 - [REVISED] Final benchmarks: GPQA generative + GSM8K (generation-only, limit 200, 0-shot)
-- [ ] Q8_0 ceiling: GPQA + GSM8K
-- [ ] UD-Q4_K_XL: GPQA + GSM8K
-- [ ] Q4_K_M (bartowski): GPQA + GSM8K
-- [ ] AesSedai Q4_K_M: GPQA + GSM8K
-- [ ] 4×2 score matrix completed
+- [x] Q8_0 ceiling: GPQA=0.415, GSM8K=0.570
+- [x] UD-Q4_K_XL: GPQA=0.450, GSM8K=0.670
+- [x] Q4_K_M (bartowski): GPQA=0.430, GSM8K=0.735
+- [x] AesSedai Q4_K_M: GPQA=0.430, GSM8K=0.670
+- [x] 4×2 score matrix completed
+- [CAVEAT] Results unreliable for quant comparison: all Q4 quants outscore Q8_0 (theoretically impossible). Root cause: max_gen_toks=256 too small for thinking model, flexible-extract sensitivity to thinking chain length. PPL/KLD remain better metrics for quant quality.
 
 ### Phase D: AesSedai Q4_K_M
 - [x] Model downloaded (split GGUF, 20.6 GiB)
