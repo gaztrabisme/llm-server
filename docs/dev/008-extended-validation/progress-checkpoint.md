@@ -63,7 +63,7 @@
 - All answer choices get logprob=0 → random chance scores
 - All loglikelihood benchmarks produce **identical scores across all quants** at random chance levels
 
-**Evidence**: ARC=0.234, HellaSwag=0.264, GPQA=0.246, Winogrande=0.496 — all identical across Q8_0, UD-Q4_K_XL, Q4_K_M. Only GSM8K (generation) showed real variation (0.59/0.65/0.73).
+**Evidence**: ARC=0.234, HellaSwag=0.264, GPQA=0.246, Winogrande=0.496 — all identical across Q8_0, UD-Q4_K_XL, Q4_K_M. Only GSM8K (generation, flexible-extract) showed real variation: Q8_0=0.59, UD-Q4_K_XL=0.65, Q4_K_M=0.73 (v1 runs, --limit 100).
 
 **Impact**: loglikelihood, loglikelihood_rolling, and multiple_choice task types are ALL broken with llama.cpp's API. Only `generate_until` tasks produce valid results.
 
@@ -137,3 +137,18 @@ Dropped from plan:
 | 6 | C | local-completions + arc_challenge_llama | Failed: model generates `<think>` tags, 100 tokens exhausted before answer | Dropped ARC llama variant |
 | 7 | C | local-completions + gpqa_main_generative_n_shot | **Success**: 2/5 on sanity check, model outputs "(A)", "(B)" directly | Using for full eval |
 | 8 | C | local-completions + gsm8k (v2, limit 200) | **Success**: generation works, scores vary across quants | Using for full eval |
+
+## Future Improvements (Brainstormed)
+
+### Unlocking Loglikelihood Benchmarks
+1. **llama-cpp-python** (Python bindings) supports `echo=true` — could unlock ARC, HellaSwag, MMLU-Pro, Winogrande. Trade-off: may not support `--fit on` or match native server performance
+2. **Proxy approach**: Write a thin proxy between lm-eval and llama-server that synthesizes prompt logprobs via native `/completion` endpoint
+3. **Disable thinking mode**: `--chat-template-kwargs '{"enable_thinking": false}'` suppresses `<think>` tags for chat completions. Would fix arc_challenge_llama and other chat-based benchmarks
+
+### Additional Generation Benchmarks Available
+- **MATH-hard (minerva_math)**: Competition math, Level 5 only. Strong reasoning benchmark
+- **IFEval**: Instruction following, 0-shot, verifiable constraints
+- **DROP**: Reading comprehension with discrete reasoning
+- **BBH (bbh_cot_fewshot)**: BIG-Bench Hard, 23 hard tasks, generative variant
+- **TriviaQA**: Factual knowledge recall
+- All are `generate_until` tasks that work with local-completions

@@ -20,15 +20,17 @@
 
 ### Phase C: Real-World Evals
 - [x] lm-eval-harness installed and sanity-checked
-- [REVISED] MMLU-Pro → dropped: uses generate_until (~50s/request with thinking), impractical (~97h/quant)
-- [REVISED] HumanEval, MBPP → dropped: code execution overhead, generation-based, same speed issue
-- [REVISED] Final benchmarks: ARC-Challenge, HellaSwag, GPQA, Winogrande (loglikelihood) + GSM8K (generate, limited)
 - [PATCHED] lm-eval openai_completions.py: llama.cpp returns new-format logprobs (content[]), lm-eval expected old format (token_logprobs[])
-- [ ] Q8_0 ceiling: 5 benchmarks (ARC-Challenge, HellaSwag, GPQA, Winogrande, GSM8K)
-- [ ] UD-Q4_K_XL: same 5 benchmarks
-- [ ] Q4_K_M (bartowski): same 5 benchmarks
-- [ ] AesSedai Q4_K_M: same 5 benchmarks
-- [ ] 4×5 score matrix completed
+- [BUG] llama.cpp doesn't support echo=true — ALL loglikelihood benchmarks produce identical random-chance scores across all quants
+- [DROPPED] ARC-Challenge, HellaSwag, Winogrande: loglikelihood-only tasks, broken with llama.cpp
+- [DROPPED] MMLU-Pro, HumanEval, MBPP: generation-based but impractical (~50s/request with thinking mode)
+- [DROPPED] ARC-Challenge generative variants: arc_challenge_chat (stop "." fires immediately), arc_challenge_llama (`<think>` tags exhaust max_gen_toks)
+- [REVISED] Final benchmarks: GPQA generative + GSM8K (generation-only, limit 200, 0-shot)
+- [ ] Q8_0 ceiling: GPQA + GSM8K
+- [ ] UD-Q4_K_XL: GPQA + GSM8K
+- [ ] Q4_K_M (bartowski): GPQA + GSM8K
+- [ ] AesSedai Q4_K_M: GPQA + GSM8K
+- [ ] 4×2 score matrix completed
 
 ### Phase D: AesSedai Q4_K_M
 - [x] Model downloaded (split GGUF, 20.6 GiB)
