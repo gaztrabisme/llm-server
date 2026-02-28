@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
+# DEPRECATED: Use `llm-bench speed` instead (Session 009).
+#   pip install -e . && llm-bench speed --help
+# =============================================================================
 # bench-matrix.sh — Universal matrix benchmark runner for llama.cpp
 # =============================================================================
 #

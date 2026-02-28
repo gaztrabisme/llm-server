@@ -23,3 +23,5 @@ Thumbs.db
 .idea/
 .vscode/
 __pycache__/
+*.egg-info/
+llm-bench.yaml

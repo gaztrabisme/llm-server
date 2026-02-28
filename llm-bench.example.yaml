@@ -1,0 +1,64 @@
+# llm-bench configuration
+# Copy to llm-bench.yaml and adjust for your hardware.
+# Run `llm-bench setup` to auto-generate this file.
+
+server:
+  # Docker image for llama-server
+  image: "llm-server/llama-cpp:latest-fit"
+  # Port to expose
+  port: 8080
+  # Directory containing GGUF model files (mounted as /models in Docker)
+  model_dir: "./models"
+  # Max seconds to wait for server health check
+  health_timeout: 600
+  # Seconds between health check polls
+  health_interval: 5
+
+# Arguments passed to llama-server inside the container.
+# These map to CLI flags: model → -m, ctx_size → -c, etc.
+server_args:
+  model: "/models/Qwen3.5-35B-A3B-Q4_K_M.gguf"
+  ctx_size: 65536
+  threads: 20
+  flash_attn: true      # -fa on
+  no_mmap: true         # --no-mmap
+  jinja: true           # --jinja
+  fit: true             # --fit on (CUDA auto GPU/CPU split)
+  cache_type_k: "q8_0"  # -ctk q8_0
+  cache_type_v: "q8_0"  # -ctv q8_0
+  # Uncomment for manual offload instead of --fit:
+  # n_gpu_layers: 999
+  # offload_tensors: "exps=CPU"
+  # Uncomment for batch size tuning:
+  # batch_size: 4096
+  # ubatch_size: 4096
+
+output:
+  # Directory for benchmark result JSON files
+  dir: "./benchmarks/matrix"
+
+speed:
+  # Prompt processing token lengths to test
+  pp_lengths: [512, 1024, 4096, 16384]
+  # Runs per PP length (first is warmup)
+  pp_runs: 3
+  # TG workload names (see llm_bench/workloads/defaults.py)
+  tg_workloads: ["short", "medium", "long", "multi_turn"]
+  # Runs per TG workload (first is warmup)
+  tg_runs: 5
+  # Max tokens to generate per request
+  tg_max_tokens: 256
+  # Temperature for TG requests
+  tg_temperature: 0.7
+  # Temperature for PP requests
+  pp_temperature: 0.0
+
+quality:
+  # WikiText-2 corpus path for perplexity
+  corpus: "benchmarks/perplexity/wikitext-2-raw/wiki.test.raw"
+  # Reference quantization for KLD comparison
+  reference_quant: "Q8_0"
+  # Model family name (for labeling)
+  model_base: "Qwen3.5-35B-A3B"
+  # Context size for perplexity measurement
+  ctx: 512

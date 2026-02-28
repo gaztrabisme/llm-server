@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# DEPRECATED: Use `llm-bench quality` instead (Session 009).
+#   pip install -e . && llm-bench quality --help
+#
 # Quantization quality benchmark: Perplexity + KL Divergence
 # Usage: ./quant-quality.sh [reference_quant]
 #

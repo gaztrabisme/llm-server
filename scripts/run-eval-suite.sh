@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED: Use `llm-bench eval` instead (Session 009).
+#   pip install -e . && llm-bench eval --help
+#
 # Run lm-eval-harness benchmarks for all 4 quants sequentially
 # Each quant: start server → wait for health → run evals → stop server
 #

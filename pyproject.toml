@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-bench"
+version = "0.1.0"
+description = "Reusable benchmark framework for llama.cpp LLM servers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+eval = ["lm-eval[api]>=0.4"]
+
+[project.scripts]
+llm-bench = "llm_bench.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["llm_bench*"]

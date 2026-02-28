@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Matrix benchmark comparison tool for llm-server Session 007+.
+"""DEPRECATED: Use `llm-bench compare` instead (Session 009).
+    pip install -e . && llm-bench compare --help
+
+Matrix benchmark comparison tool for llm-server Session 007+.
 
 Reads matrix benchmark results from benchmarks/matrix/ and produces comparison
 tables sliced by any matrix axis.

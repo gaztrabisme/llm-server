@@ -149,7 +149,17 @@ Compare with: `python3 scripts/compare-results.py benchmarks/`
 - **AesSedai Q4_K_M** (Session 008 Phase D) — PPL 6.3949, KLD 0.0095, same-top-p 95.74%. Best quality Q4 quant. ~44 tok/s (same speed class as UD-Q4_K_XL)
 - **lm-eval-harness evaluation** (Session 008 Phase C) — llama.cpp doesn't support `echo=true`, breaking all loglikelihood benchmarks (ARC, HellaSwag, MMLU-Pro, Winogrande). Generation-only benchmarks (GPQA, GSM8K) work but are unreliable for quant comparison due to thinking chain truncation at max_gen_toks=256. PPL/KLD confirmed as better proxy than task evals for quant quality
 
-New scripts: `bench-matrix.sh` (universal benchmark runner with PP+TG), `compare-matrix.py` (matrix comparison tool), `vision-eval.sh` (vision quality eval), `run-eval-suite.sh` (lm-eval-harness generation suite). Shared bench library: `lib-bench-common.sh` (env parsing, Docker lifecycle, VRAM capture).
+- **`llm-bench` CLI framework** (Session 009) — Python package replacing bash scripts. 6 subcommands: `setup` (hardware detection), `speed` (PP/TG benchmarks), `quality` (PPL/KLD), `eval` (lm-eval-harness), `compare` (result comparison), `report` (markdown generation). Backward-compatible with .env configs and result JSON.
+
+New CLI: `llm-bench` (install: `pip install -e .`). Replaces old bash scripts (kept for reference with deprecation notices):
+- `llm-bench speed` → replaces `bench-matrix.sh`
+- `llm-bench quality` → replaces `quant-quality.sh`
+- `llm-bench eval` → replaces `run-eval-suite.sh`
+- `llm-bench compare` → replaces `compare-matrix.py`
+- `llm-bench report` → new
+- `llm-bench setup` → new
+
+Legacy scripts still available: `bench-matrix.sh`, `compare-matrix.py`, `vision-eval.sh`, `run-eval-suite.sh`, `lib-bench-common.sh`.
 
 ### Ready to Test
 - **Thinking mode** — on by default in Qwen3.5, verify it works well with downstream apps
@@ -191,12 +201,18 @@ See `docs/dev/007-community-experiments/` for Session 007 (complete):
 - 14 config files in `configs/llama-cpp-s007-*.env`
 - Scripts: `bench-matrix.sh`, `compare-matrix.py`, `vision-eval.sh`, `lib-bench-common.sh`
 
-See `docs/dev/008-extended-validation/` for Session 008 (in progress):
-- `success-criteria.md` — Phases A-D complete, Phase E pending
+See `docs/dev/008-extended-validation/` for Session 008 (complete):
+- `success-criteria.md` — Phases A-E complete
 - `progress-checkpoint.md` — extended context results, config flags, lm-eval findings, AesSedai comparison
 - 7 benchmark JSON files in `benchmarks/matrix/s008-*.json`
 - Eval results in `benchmarks/evals/gen-v2/` (GPQA + GSM8K, 4 quants)
 - Script: `run-eval-suite.sh` (lm-eval-harness generation benchmarks)
+
+See `docs/dev/009-llm-bench-framework/` for Session 009 (complete):
+- `success-criteria.md` — reusable Python CLI framework replacing bash scripts
+- Package: `llm_bench/` (24 files), installed via `pip install -e .`, entry point: `llm-bench`
+- 6 subcommands: setup, speed, quality, eval, compare, report
+- Backward-compatible with .env configs and existing result JSON files
 
 ### Daniel's Component Ablation Study
 
