@@ -159,6 +159,30 @@ Q8_0 improves dramatically (+50%) with more token budget, confirming its thinkin
 | 9 | C | Full gen-v2 suite (4 quants × GPQA+GSM8K, limit 200) | **Completed** but results unreliable: all Q4 quants outscore Q8_0 | Thinking chain truncation at max_gen_toks=256 |
 | 10 | C | max_gen_toks=2048 experiment (Q8_0 + Q4_K_M, 20 samples) | **Confirmed**: Q8_0 jumps from 0.50→0.75 (+50%), Q4_K_M only 0.70→0.80 (+14%) | Thinking chain length is the confound, not model quality |
 
+## Phase E: Vision Tests (UD-Q4_K_XL, `latest` image, --mmproj, ctx=8192, fit-target 2000)
+
+### E1: Vision Quality
+
+| Test | Input | Result | Notes |
+|------|-------|--------|-------|
+| Code OCR | Python fibonacci function image | **Perfect**: reproduced code exactly | 240 prompt tokens, 445 completion tokens |
+| Math problem | Quadratic equation image (3x²+5x-2=0) | **Correct**: used quadratic formula, correct factoring | 122 prompt tokens |
+| Table/document | Revenue table with 4 quarters | **Perfect**: identified Q4 as highest profit ($18.8M), total $198.1M | 174 prompt tokens |
+
+### E2: Image Size → Token Count & PP Speed
+
+| Image Size | Prompt Tokens | Wall Time (ms) | Effective PP (tok/s) |
+|-----------|--------------|----------------|---------------------|
+| ~350x350 | 230 | 2,455 | ~94 |
+| 1024x1024 | 1,045 | 2,915 | ~359 |
+| 2048x2048 | 4,117 | 6,975 | ~590 |
+
+**Key findings:**
+- Image tokens scale roughly quadratically with image dimensions: 350px→230tok, 1024px→1045tok, 2048px→4117tok
+- PP speed increases with image size (larger prompt batch → better throughput)
+- 2048x2048 images are practical: ~7s processing time, 4117 tokens (within 8k context)
+- Vision quality is excellent across code, math, and document reading tasks
+
 ## Future Improvements (Brainstormed)
 
 ### Unlocking Loglikelihood Benchmarks

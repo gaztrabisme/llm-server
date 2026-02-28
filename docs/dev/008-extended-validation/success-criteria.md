@@ -40,6 +40,6 @@
 - [x] Three-way comparison complete: AesSedai wins all quality metrics (KLD 3x better than bartowski)
 
 ### Phase E: Vision & Community
-- [ ] Harder vision tests (code OCR, math, chart, document, photo)
-- [ ] Large image PP speed (1024x1024, 2048x2048)
+- [x] Harder vision tests: code OCR (perfect), math solving (correct), table reading (perfect)
+- [x] Large image PP speed: 350px=230tok/2.5s, 1024px=1045tok/2.9s, 2048px=4117tok/7.0s
 - [ ] Reddit post updated with S008 findings
