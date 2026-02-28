@@ -19,6 +19,13 @@ RUN if [ -n "$LLAMA_CPP_REF" ]; then \
       git clone --depth 1 https://github.com/ggml-org/llama.cpp.git . ; \
     fi
 
+# Fix int32 overflow in perplexity KLD base mode for large-vocab models
+# n_ctx * nv overflows int32 when ctx >= 8648 (Qwen3.5 n_vocab=248320)
+RUN sed -i 's/log_probs\.resize(n_ctx \* nv)/log_probs.resize(size_t(n_ctx) * nv)/' tools/perplexity/perplexity.cpp \
+    && sed -i 's/n_token\*nv\*sizeof(uint16_t)/size_t(n_token)*nv*sizeof(uint16_t)/' tools/perplexity/perplexity.cpp \
+    && sed -i 's/n_chunk\*n_ctx\*sizeof(tokens\[0\])/size_t(n_chunk)*n_ctx*sizeof(tokens[0])/' tools/perplexity/perplexity.cpp \
+    && sed -i 's/\.data() + i\*nv/.data() + size_t(i)*nv/g' tools/perplexity/perplexity.cpp
+
 # Make CUDA driver stub findable by the linker (real libcuda.so is injected at runtime by nvidia-container-toolkit)
 # Need both libcuda.so and libcuda.so.1 — the shared lib records DT_NEEDED for libcuda.so.1
 RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 \

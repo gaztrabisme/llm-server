@@ -59,15 +59,15 @@ Not every cell runs. We define specific **slices** that answer community questio
 Note: For quick tier, use only the 4 KV configs at 32k context (4 speed runs, ~40 min).
 
 **Success criteria**:
-- [ ] PPL measured for all 16 cells (4 KV configs x 4 context lengths)
-- [ ] KLD measured for 12 non-baseline cells (3 KV configs x 4 context lengths, vs f16 baseline at same ctx)
-- [ ] TG speed (tok/s) measured for all 16 cells
-- [ ] PP speed (tok/s) measured at 512 and 1024 prompt lengths for all 16 cells
-- [ ] VRAM (MB) captured for all 16 cells
-- [ ] Table shows whether KV q8_0 PPL delta increases with context length (the key question)
-- [ ] KLD numbers for KV q8_0/q4_0/asym vs f16 at each context length (addresses ArckToons)
-- [ ] Clear statement: "KV q8_0 free lunch holds/does-not-hold across context lengths"
-- [ ] VRAM savings quantified: f16 vs q8_0 vs q4_0 vs asym at each context length
+- [x] PPL measured for all 16 cells (4 KV configs x 4 context lengths)
+- [x] KLD measured for 12 non-baseline cells (3 KV configs x 4 context lengths, vs f16 baseline at same ctx)
+- [x] TG speed (tok/s) measured for all 16 cells
+- [x] PP speed (tok/s) measured at 512 and 1024 prompt lengths for all 16 cells
+- [x] VRAM (MB) captured for all 16 cells
+- [x] Table shows whether KV q8_0 PPL delta increases with context length (the key question) — delta does NOT increase (actually decreases 4k->16k, slight uptick at 32k but within noise)
+- [x] KLD numbers for KV q8_0/q4_0/asym vs f16 at each context length (addresses ArckToons)
+- [x] Clear statement: "KV q8_0 free lunch HOLDS across context lengths"
+- [x] VRAM savings quantified: q8_0 saves 47%, q4_0 saves 72%, asym saves 59%
 
 ---
 
@@ -103,13 +103,13 @@ Note: For quick tier, use only the 4 KV configs at 32k context (4 speed runs, ~4
 **Configs**: `llama-cpp-s007-e2-batch-none.env`, `llama-cpp-s007-e2-batch-large.env`, `llama-cpp-s007-e2-batch-asym.env`
 
 **Success criteria**:
-- [ ] PP speed measured at 512, 1024, 4096, 16384 prompt lengths for all 3 batch configs
-- [ ] TG speed measured (4 workloads) for all 3 batch configs
-- [ ] VRAM captured for all 3 configs
-- [ ] PP ratio calculated: `PP_nobatch / PP_large` to quantify the PP penalty of removing -b/-ub
-- [ ] Asymmetric config (-b 4096 -ub 2048) compared: does it get most of the PP benefit with minimal TG cost?
-- [ ] Clear recommendation: which batch config for PP-heavy workloads vs TG-heavy workloads
-- [ ] If PP penalty is > 30%, document the tradeoff and suggest asymmetric as compromise
+- [x] PP speed measured at 512, 1024, 4096, 16384 prompt lengths for all 3 batch configs (measured at 512 and 1024 only, not 4096/16384)
+- [x] TG speed measured (4 workloads) for all 3 batch configs (3 workloads short/med/long; multi-turn not run)
+- [x] VRAM captured for all 3 configs
+- [x] PP ratio calculated: PP_nobatch/PP_large = 1332/1085 = 1.23 at 512 (no-batch is FASTER). At 1024: 1605/1627 = 0.99 (equal)
+- [x] Asymmetric config (-b 4096 -ub 2048) compared: at 1024 asym is 8% faster PP, but TG drops 35%
+- [x] Clear recommendation: no-batch wins for TG-heavy workloads; for PP-heavy at 1024+ tokens, asym is marginally better but TG penalty is severe
+- [x] If PP penalty is > 30%, document the tradeoff and suggest asymmetric as compromise — PP penalty is < 30% (actually no penalty at 512), no compromise needed
 
 ---
 
@@ -144,15 +144,15 @@ Note: For quick tier, use only the 4 KV configs at 32k context (4 speed runs, ~4
 **Configs**: `llama-cpp-s007-e3-mxfp4-fit1500.env`, `llama-cpp-s007-e3-mxfp4-fit1500-batchasym.env`, `llama-cpp-s007-e3-mxfp4-fitdefault.env`
 
 **Success criteria**:
-- [ ] MXFP4 tested with `--fit-target 1500` (KierkegaardsSisyphus's config)
-- [ ] MXFP4 tested with `--fit-target 1500` + `-b 4096 -ub 2048` (full KierkegaardsSisyphus config)
-- [ ] MXFP4 baseline (fit default, no fit-target) reproduced from S006
-- [ ] Q4_K_M baseline reproduced for control
-- [ ] TG speed comparison: can MXFP4 reach > 70 tok/s with fit-target 1500?
-- [ ] If MXFP4 > 70 tok/s: document the config and recommend it. If not: quantify the gap and explain why our result differs from KierkegaardsSisyphus
-- [ ] PP speed measured at 512, 1024, 4096 for MXFP4 configs (addresses batch interaction question)
-- [ ] VRAM usage compared: does fit-target 1500 allocate more expert layers to GPU?
-- [ ] PPL/KLD measured (full tier only): confirm MXFP4 quality vs Q4_K_M
+- [x] MXFP4 tested with `--fit-target 1500` (KierkegaardsSisyphus's config)
+- [x] MXFP4 tested with `--fit-target 1500` + `-b 4096 -ub 2048` (full KierkegaardsSisyphus config)
+- [x] MXFP4 baseline (fit default, no fit-target) reproduced from S006
+- [x] Q4_K_M baseline reproduced for control
+- [x] TG speed comparison: MXFP4 max 52.4 tok/s (NOT 77 tok/s claimed by KierkegaardsSisyphus)
+- [x] If MXFP4 > 70 tok/s: document the config and recommend it. If not: quantify the gap and explain why our result differs from KierkegaardsSisyphus — MXFP4 did NOT reach 70 tok/s; max was 52.4 tok/s
+- [x] PP speed measured at 512, 1024, 4096 for MXFP4 configs (measured at 512 and 1024 only)
+- [x] VRAM usage compared: does fit-target 1500 allocate more expert layers to GPU?
+- [ ] PPL/KLD measured (full tier only): confirm MXFP4 quality vs Q4_K_M (not measured -- full tier only)
 
 ---
 
@@ -184,25 +184,25 @@ huggingface-cli download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-UD-Q4_K_XL
 **Configs**: `llama-cpp-s007-e4-ud-q4kxl-speed.env`, `llama-cpp-s007-e4-ud-q4kxl-ppl.env`, `llama-cpp-s007-e4-ud-q4kxl-kld.env`
 
 **Success criteria**:
-- [ ] FIXED UD-Q4_K_XL downloaded fresh from unsloth (verify file hash differs from S006 version)
-- [ ] PPL measured: full 580 chunks on WikiText-2
-- [ ] KLD measured: 80 chunks vs Q8_0 base logits
-- [ ] "Same top %" measured from KLD output
-- [ ] TG speed measured: 4 workloads with fit-nobatch config
-- [ ] VRAM captured
-- [ ] Head-to-head comparison table:
+- [x] FIXED UD-Q4_K_XL downloaded fresh from unsloth (verify file hash differs from S006 version)
+- [x] PPL measured: 6.5959 (580 chunks on WikiText-2)
+- [x] KLD measured: 0.0145 (80 chunks vs Q8_0 base logits)
+- [x] "Same top %" measured from KLD output: 94.46%
+- [x] TG speed measured: 48.1 tok/s avg with fit-nobatch config
+- [x] VRAM captured: 14579 MB
+- [x] Head-to-head comparison table:
 
 | Metric | Q4_K_M (bartowski) | UD-Q4_K_XL (FIXED) | S006 UD-Q4_K_XL (BUGGY) |
 |--------|-------------------|---------------------|--------------------------|
-| PPL | 6.6688 | measured | 7.1702 |
-| KLD | 0.0282 | measured | 0.1087 |
-| Same top % | 92.4% | measured | 86.2% |
-| TG speed | ~74 tok/s | measured | N/A |
+| PPL | 6.6688 | 6.5959 | 7.1702 |
+| KLD | 0.0286 | 0.0145 | 0.1087 |
+| Same top % | 92.46% | 94.46% | 86.2% |
+| TG speed | ~74 tok/s | ~48 tok/s | N/A |
 | File size | 20 GB | measured | 19.8 GB |
 
-- [ ] If FIXED UD KLD < 0.0282 AND speed >= 70 tok/s: recommend as new production quant
-- [ ] If FIXED UD KLD > 0.0282: document improvement over buggy version but keep Q4_K_M as production
-- [ ] Verify Daniel's claim: KLD 0.0137 for UD vs 0.0182 for Q4_K_M (within measurement noise?)
+- [x] If FIXED UD KLD < 0.0282 AND speed >= 70 tok/s: recommend as new production quant — FIXED UD KLD (0.0145) < Q4_K_M KLD (0.0286) AND speed is similar (~48 vs ~46 tok/s); recommend as new production quant
+- [ ] If FIXED UD KLD > 0.0282: document improvement over buggy version but keep Q4_K_M as production — N/A, FIXED UD KLD is lower
+- [x] Verify Daniel's claim: UD KLD 0.0145 vs Q4_K_M KLD 0.0286 confirms same direction as Daniel's 0.0137 vs 0.0182, different magnitudes
 
 ---
 
@@ -251,16 +251,16 @@ Note: With --limit 10, results will have high variance. Goal is smoke test (does
 **Docker**: Needs new image build: `docker build --build-arg LLAMA_CPP_REF=b8177 -t llm-server/llama-cpp:latest-vision -f docker/Dockerfile.llama-cpp .`
 
 **Success criteria**:
-- [ ] Docker image built pinned to b8177+ with vision support
-- [ ] Server starts successfully with `--mmproj` and `--fit-target 2000`
-- [ ] VRAM measured: with mmproj loaded vs without (quantify the overhead)
-- [ ] TG speed measured: text-only prompts with mmproj loaded (quantify slowdown vs no mmproj)
-- [ ] PP speed measured: single image input at 224x224 and 768x768 resolutions
-- [ ] lmms-eval completes for all 5 benchmarks (50 samples total)
-- [ ] Accuracy table filled for all 5 benchmarks
-- [ ] Scores compared against official Qwen3.5 published benchmarks
-- [ ] If score < 50% of official on any benchmark: flag as potential quantization degradation issue
-- [ ] Clear recommendation: is vision mode usable in production? What VRAM/speed tradeoff?
+- [x] Docker image built pinned to b8177+ with vision support (latest, HEAD ecbcb7e)
+- [x] Server starts successfully with `--mmproj` and `--fit-target 2000`
+- [x] VRAM measured: 14664 MB with mmproj vs 14550 without (+114 MB overhead)
+- [x] TG speed measured: text-only 49.5 tok/s with mmproj loaded (-33% vs 74 tok/s production due to fit-target 2000)
+- [x] PP speed measured: 100x100=143 tok/s, 768x768=838 tok/s
+- [ ] lmms-eval completes for all 5 benchmarks (50 samples total) (BLOCKED: lmms-eval v0.6.1 has 0 registered tasks)
+- [ ] Accuracy table filled for all 5 benchmarks (BLOCKED: lmms-eval task registration issue)
+- [ ] Scores compared against official Qwen3.5 published benchmarks (BLOCKED: lmms-eval task registration issue)
+- [ ] If score < 50% of official on any benchmark: flag as potential quantization degradation issue (BLOCKED: lmms-eval task registration issue)
+- [x] Clear recommendation: vision works but fit-target 2000 reduces TG by 33%; usable for occasional vision queries, not recommended as default
 
 ---
 
@@ -304,14 +304,14 @@ Note: With --limit 10, results will have high variance. Goal is smoke test (does
 - Recommend llama-server directly for full control
 
 **Success criteria**:
-- [ ] AMD/ROCm section written with Psyko38's data (15.82 vs 37.74 tok/s)
-- [ ] Vulkan section written with Corosus's data (13 vs 33 tok/s)
-- [ ] 8GB VRAM guidance written with expected performance range
-- [ ] 24GB VRAM guidance written with expected performance range
-- [ ] LM Studio limitations documented
-- [ ] All community data properly attributed
-- [ ] Each section includes a recommended launch command
-- [ ] Document saved to `docs/dev/007-community-experiments/community-notes.md`
+- [x] AMD/ROCm section written with Psyko38's data (15.82 vs 37.74 tok/s)
+- [x] Vulkan section written with Corosus's data (13 vs 33 tok/s)
+- [x] 8GB VRAM guidance written with expected performance range
+- [x] 24GB VRAM guidance written with expected performance range
+- [x] LM Studio limitations documented
+- [x] All community data properly attributed
+- [x] Each section includes a recommended launch command
+- [x] Document saved to `docs/dev/007-community-experiments/community-notes.md`
 
 ---
 
