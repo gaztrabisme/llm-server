@@ -72,13 +72,17 @@ FLAG_MAP = {
     "batch_size": "-b",
     "ubatch_size": "-ub",
     "mmproj": "--mmproj",
+    "fit_target": "--fit-target",
+    "fit_ctx": "--fit-ctx",
+    "fuse_gate_up_exps": "--fuse-gate-up-exps",
+    "n_cpu_moe": "--n-cpu-moe",
 }
 
 # Boolean flags that take "on"/"off" values (not just presence/absence)
 BOOL_ON_OFF_FLAGS = {"flash_attn", "fit"}
 
 # Boolean flags that are just presence flags (no value)
-BOOL_PRESENCE_FLAGS = {"no_mmap", "jinja"}
+BOOL_PRESENCE_FLAGS = {"no_mmap", "jinja", "fuse_gate_up_exps"}
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -103,6 +107,9 @@ def apply_overrides(cfg: dict[str, Any], **overrides) -> dict[str, Any]:
         if value is None:
             continue
         if key == "model":
+            # Bare filename → prepend /models/ (Docker mount point)
+            if "/" not in str(value):
+                value = f"/models/{value}"
             cfg["server_args"]["model"] = value
         elif key == "image":
             cfg["server"]["image"] = value
@@ -125,6 +132,14 @@ def apply_overrides(cfg: dict[str, Any], **overrides) -> dict[str, Any]:
             cfg["server_args"]["batch_size"] = value
         elif key == "ubatch":
             cfg["server_args"]["ubatch_size"] = value
+        elif key == "fit_target":
+            cfg["server_args"]["fit_target"] = value
+        elif key == "fit_ctx":
+            cfg["server_args"]["fit_ctx"] = value
+        elif key == "n_cpu_moe":
+            cfg["server_args"]["n_cpu_moe"] = value
+        elif key == "fuse_gate_up_exps":
+            cfg["server_args"]["fuse_gate_up_exps"] = value
     return cfg
 
 

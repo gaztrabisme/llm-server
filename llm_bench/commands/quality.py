@@ -12,6 +12,7 @@ import click
 
 from ..core.config import load_config, apply_overrides
 from ..core.docker import run_docker_command
+from ..core.native import run_native_command
 
 
 # --- Regex patterns for parsing llama-perplexity output ---
@@ -66,11 +67,37 @@ def _run_perplexity(
     extra_volumes: list[str] | None = None,
     verbose: bool = False,
     dry_run: bool = False,
+    native: bool = False,
+    perplexity_bin: str | None = None,
 ) -> str:
-    """Run llama-perplexity via Docker and return combined stdout+stderr.
+    """Run llama-perplexity via Docker or native and return combined stdout+stderr.
 
     If dry_run is True, prints the command and returns empty string.
     """
+    if native:
+        if dry_run:
+            arg_str = " ".join(args)
+            click.echo(f"  {perplexity_bin} {arg_str}")
+            return ""
+
+        result = run_native_command(
+            binary=perplexity_bin,
+            args=args,
+            verbose=verbose,
+            capture=True,
+        )
+
+        output = (result.stdout or "") + (result.stderr or "")
+
+        if result.returncode != 0:
+            raise click.ClickException(
+                f"llama-perplexity failed (exit {result.returncode}).\n"
+                f"Output:\n{output[-2000:]}"
+            )
+
+        return output
+
+    # Docker mode
     volumes = [f"{os.path.abspath(corpus_dir)}:/data"]
     if extra_volumes:
         volumes.extend(extra_volumes)
@@ -124,8 +151,12 @@ def _run_perplexity(
               help="Path to existing logits file for KLD")
 @click.option("--model-dir", default=None, help="Model directory")
 @click.option("--dry-run", is_flag=True,
-              help="Print Docker commands without executing")
+              help="Print commands without executing")
 @click.option("--verbose", is_flag=True, help="Show detailed output")
+@click.option("--native", is_flag=True,
+              help="Use native binary instead of Docker")
+@click.option("--perplexity-bin", default=None,
+              help="Path to llama-perplexity binary (required with --native)")
 def quality(
     config_path: str | None,
     model: str,
@@ -139,6 +170,8 @@ def quality(
     model_dir: str | None,
     dry_run: bool,
     verbose: bool,
+    native: bool,
+    perplexity_bin: str | None,
 ) -> None:
     """Measure model quality via perplexity and KL divergence."""
 
@@ -148,6 +181,9 @@ def quality(
 
     if kld_only and logits_file is None:
         raise click.UsageError("--kld-only requires --logits-file")
+
+    if native and perplexity_bin is None:
+        raise click.UsageError("--native requires --perplexity-bin")
 
     # --- Load config and apply CLI overrides ---
     cfg = load_config(config_path)
@@ -168,7 +204,7 @@ def quality(
     if ctx is not None:
         resolved_ctx = ctx
 
-    # --- Resolve model filename for Docker ---
+    # --- Resolve model filename ---
     # Model path: could be absolute, relative, or just a filename
     model_path = Path(model)
     if model_path.is_absolute():
@@ -177,15 +213,11 @@ def quality(
         model_filename = model_path.name
     else:
         # Strip leading directory components (e.g., "models/foo.gguf" → "foo.gguf")
-        # Docker mount maps model_dir → /models, so we only need the filename
         model_filename = model_path.name
 
-    # Docker paths
-    docker_model = f"/models/{model_filename}"
     corpus_path = Path(resolved_corpus)
     corpus_dir = str(corpus_path.parent)
     corpus_filename = corpus_path.name
-    docker_corpus = f"/data/{corpus_filename}"
 
     # --- Resolve reference model for KLD ---
     reference_model = reference
@@ -194,8 +226,6 @@ def quality(
         ref_quant = quality_cfg.get("reference_quant", "Q8_0")
         model_base = quality_cfg.get("model_base", "Qwen3.5-35B-A3B")
         reference_model = f"{model_base}-{ref_quant}.gguf"
-
-    docker_reference = f"/models/{Path(reference_model).name}" if reference_model else None
 
     # --- Resolve logits file ---
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -207,7 +237,26 @@ def quality(
         logits_basename = f"logits-ref-{timestamp}.bin"
         resolved_logits = os.path.join(resolved_model_dir, logits_basename)
 
-    docker_logits = f"/models/{Path(resolved_logits).name}"
+    # --- Resolve paths based on execution mode ---
+    if native:
+        # Native mode: use real filesystem paths
+        abs_model_dir = os.path.abspath(resolved_model_dir)
+        effective_model = os.path.join(abs_model_dir, model_filename)
+        effective_corpus = str(corpus_path)
+        effective_reference = (
+            os.path.join(abs_model_dir, Path(reference_model).name)
+            if reference_model else None
+        )
+        effective_logits = os.path.abspath(resolved_logits)
+    else:
+        # Docker mode: use mount-point paths
+        effective_model = f"/models/{model_filename}"
+        effective_corpus = f"/data/{corpus_filename}"
+        effective_reference = (
+            f"/models/{Path(reference_model).name}"
+            if reference_model else None
+        )
+        effective_logits = f"/models/{Path(resolved_logits).name}"
 
     # --- Display header ---
     model_label = Path(model_filename).stem
@@ -229,8 +278,8 @@ def quality(
         click.echo(f"  Measuring PPL (ctx={resolved_ctx})...")
 
         ppl_args = _build_perplexity_args(
-            model_path=docker_model,
-            corpus_path=docker_corpus,
+            model_path=effective_model,
+            corpus_path=effective_corpus,
             ctx=resolved_ctx,
             threads=resolved_threads,
         )
@@ -242,6 +291,8 @@ def quality(
             args=ppl_args,
             verbose=verbose,
             dry_run=dry_run,
+            native=native,
+            perplexity_bin=perplexity_bin,
         )
 
         ppl_value = _parse_float(PPL_RE, output)
@@ -263,11 +314,11 @@ def quality(
             click.echo(f"  Generating reference logits ({Path(reference_model).stem})...")
 
             ref_args = _build_perplexity_args(
-                model_path=docker_reference,
-                corpus_path=docker_corpus,
+                model_path=effective_reference,
+                corpus_path=effective_corpus,
                 ctx=resolved_ctx,
                 threads=resolved_threads,
-                extra_args=["--kl-divergence-base", docker_logits],
+                extra_args=["--kl-divergence-base", effective_logits],
             )
 
             _run_perplexity(
@@ -277,6 +328,8 @@ def quality(
                 args=ref_args,
                 verbose=verbose,
                 dry_run=dry_run,
+                native=native,
+                perplexity_bin=perplexity_bin,
             )
 
             if not dry_run:
@@ -286,12 +339,12 @@ def quality(
         click.echo("  Comparing KLD...")
 
         kld_args = _build_perplexity_args(
-            model_path=docker_model,
-            corpus_path=docker_corpus,
+            model_path=effective_model,
+            corpus_path=effective_corpus,
             ctx=resolved_ctx,
             threads=resolved_threads,
             extra_args=[
-                "--kl-divergence-base", docker_logits,
+                "--kl-divergence-base", effective_logits,
                 "--kl-divergence",
             ],
         )
@@ -303,6 +356,8 @@ def quality(
             args=kld_args,
             verbose=verbose,
             dry_run=dry_run,
+            native=native,
+            perplexity_bin=perplexity_bin,
         )
 
         kld_mean = _parse_float(KLD_MEAN_RE, kld_output)

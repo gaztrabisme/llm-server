@@ -20,7 +20,7 @@ Run large Mixture-of-Experts models locally and serve them via API for other pro
 - 262,144 native context length (extensible to 1,010,000 via YaRN), production config uses `-c 65536` conservatively. Thinking mode enabled by default
 - WikiText-2 PPL: Q8_0 = 6.5342, UD-Q4_K_XL = 6.5959 (+1.0%), Q4_K_M = 6.6688 (+2.1%)
 - UD-Q4_K_XL (FIXED) is the best Q4-class quant: KLD 0.0145 vs Q4_K_M 0.0286, same-top-p 94.46% vs 92.46%. (S007 E4 — old UD quant had MXFP4 bug, now fixed)
-- Note: production server currently runs Q4_K_M (~74 tok/s). UD-Q4_K_XL achieves ~48 tok/s with same config (similar speed, better quality)
+- Note: production server currently runs Q4_K_M (Unsloth, not bartowski — see S011). Speed: ~50 tok/s (S011 measurement, down from ~74 tok/s in S006 — see speed regression note below). UD-Q4_K_XL achieves ~48 tok/s with same config (similar speed, better quality)
 
 Previous model: Qwen3-Next-80B-A3B-Instruct (Q8_0, 84.8 GB, ~22 tok/s) — replaced in Session 005
 
@@ -28,11 +28,11 @@ Previous model: Qwen3-Next-80B-A3B-Instruct (Q8_0, 84.8 GB, ~22 tok/s) — repla
 
 Auto VRAM management via `--fit on`: llama.cpp automatically determines the optimal GPU/CPU split based on available VRAM. Key insight (Session 006): removing `-b/-ub` batch flags frees VRAM for more expert layers on GPU, yielding better throughput than manual `--n-cpu-moe` tuning. VRAM usage: ~14.6 GB.
 
-**Production performance**: ~74 tok/s token generation (Q4_K_M + `--fit on`, no batch flags).
+**Production performance**: ~50 tok/s token generation (Q4_K_M + `--fit on`, no batch flags). S006 measured ~74 tok/s but this has not been reproducible since S007+ (see speed regression investigation in S011).
 
 ## Reference Launch Command
 
-Winning config (fit-nobatch: Q4_K_M + auto offload, ~74 tok/s, Session 006):
+Winning config (fit-nobatch: Q4_K_M + auto offload, ~50 tok/s, Session 006/011):
 
 ```bash
 ./llama-server \
@@ -72,7 +72,7 @@ llama-server provides:
 - PCIe 5.0 bandwidth (~64 GB/s) is the bottleneck, not GPU compute
 - `--no-mmap` is important: loads entire model into RAM upfront for consistent offload performance
 - Thread count (`-t`) is tuned: **20 is optimal** (Session 004 sweep). U-shaped curve — t16 is worst, t8/t20/t24 are best tier
-- **KV cache q8_0 is a confirmed free lunch across all context lengths** (4k-32k): PPL delta < 0.3%, KLD < 0.019, same-top-p > 95.1% at every tested context length. KLD actually decreases from 4k→16k, slight uptick at 32k but well within noise. KV cache savings: q8_0 47%, q4_0 72%, asym 59% vs f16. Only 10 KV cache layers due to hybrid SSM architecture. (S006 E1 + S007 E1 full tier)
+- **KV cache q8_0 is a confirmed free lunch across all context lengths** (4k-32k): PPL delta < 0.3%, KLD < 0.019, same-top-p > 95.1% at every tested context length. KLD actually decreases from 4k→16k, slight uptick at 32k but well within noise. KV cache savings: q8_0 47%, q4_0 72%, asym 59% vs f16. Only 10 KV cache layers due to hybrid SSM architecture. **Caveat**: this "free lunch" is specific to MoE models with few KV layers — dense models (e.g. 27B) have KV on every layer, and Lucis_unbra reports 10 tok/s drop (75→65) with KV q8_0 on a 3090+Windows. (S006 E1 + S007 E1 full tier)
 - **UD-Q4_K_XL (FIXED) is the best Q4-class quant**: PPL 6.5959 (vs Q4_K_M 6.6688), KLD 0.0145 (vs 0.0286), same-top-p 94.46% (vs 92.46%). Better quality at same speed and size. Old UD quant had MXFP4 bug (S006 E2) — now fixed. (S007 E4)
 - Do NOT use `-b/-ub` batch flags with `--fit on` — they hurt TG by ~35% and don't help PP at short prompts (512 tokens). At 1024+ tokens, asymmetric batch is only 8% faster PP, not worth the TG penalty. No-batch wins for all workloads. (S006 + S007 E2)
 - `--fit on` is CUDA-specific: Vulkan users report 2.5x slower (Corosus, 5070 Ti), ROCm users report 2.4x slower (Psyko38, RX 9060 XT). AMD/Vulkan users should use manual `--n-cpu-moe` instead
@@ -96,7 +96,7 @@ Tested 2026-02-25 (S005), 2026-02-27 (S006). All configs: 20 threads, 65k ctx, `
 
 ### Winner: Q4_K_M + fit-nobatch (Session 006)
 
-**~74 tok/s** with 14.6 GB VRAM — +7% over Session 005's C7 config, and simpler (no manual `--n-cpu-moe` tuning). Key insight: removing `-b/-ub` batch flags frees VRAM for `--fit` to allocate more expert layers on GPU.
+**~74 tok/s** (S006 measurement) with 14.6 GB VRAM — +7% over Session 005's C7 config, and simpler (no manual `--n-cpu-moe` tuning). Key insight: removing `-b/-ub` batch flags frees VRAM for `--fit` to allocate more expert layers on GPU. **Note**: S011 re-measurement shows ~50 tok/s with identical setup — speed regression unexplained (see S011).
 
 ### Key Findings
 
@@ -142,7 +142,7 @@ Compare with: `python3 scripts/compare-results.py benchmarks/`
 - **PP vs TG batch tradeoff** (Session 007 E2) — batch flags hurt TG by 35%, don't help PP at short prompts. No-batch confirmed optimal
 - **MXFP4 re-evaluation** (Session 007 E3) — max 52.4 tok/s (not 77 claimed), fit-target 1500 reduces VRAM for experts
 - **Fixed UD-Q4_K_XL validation** (Session 007 E4) — KLD 0.0145 vs Q4_K_M 0.0286. Better quality, same speed. New best Q4-class quant
-- **Vision mode evaluation** (Session 007 E5) — works with --mmproj, 49.5 tok/s TG (33% slower due to fit-target 2000), minimal VRAM overhead (~114 MB). lmms-eval quality benchmarks blocked by v0.6.1 task registration issue
+- **Vision mode evaluation** (Session 007 E5) — works with --mmproj, 49.5 tok/s TG (33% slower due to fit-target 2000), minimal VRAM overhead (~114 MB). lmms-eval quality benchmarks blocked by v0.6.1 task registration issue. **Note**: `--fit-target` is only needed when CLIP/mmproj is loaded — the vision projector's VRAM throws off `--fit`'s auto-split. For text-only, `--fit on` alone is correct (maho_Yun confirmed)
 - **Community notes** (Session 007 E6) — AMD/ROCm, Vulkan, 8GB/24GB VRAM, LM Studio guidance
 - **Extended context KV quality** (Session 008 Phase A) — PPL at 65k/128k/262k, KV q8_0 free lunch confirmed (delta -0.11% at 65k, -0.13% at 128k). TG ~42-45 tok/s across all contexts. 262k loads on 16GB GPU (no OOM)
 - **Config flags** (Session 008 Phase B) — `--no-kv-offload` = -63% TG, never use. `-ub 1024 -b 2048` = TG -3.5%/PP-1024 +22%, not recommended. PP scales 1390→1784 tok/s at 512→16k tokens
@@ -150,6 +150,8 @@ Compare with: `python3 scripts/compare-results.py benchmarks/`
 - **lm-eval-harness evaluation** (Session 008 Phase C) — llama.cpp doesn't support `echo=true`, breaking all loglikelihood benchmarks (ARC, HellaSwag, MMLU-Pro, Winogrande). Generation-only benchmarks (GPQA, GSM8K) work but are unreliable for quant comparison due to thinking chain truncation at max_gen_toks=256. PPL/KLD confirmed as better proxy than task evals for quant quality
 
 - **`llm-bench` CLI framework** (Session 009) — Python package replacing bash scripts. 6 subcommands: `setup` (hardware detection), `speed` (PP/TG benchmarks), `quality` (PPL/KLD), `eval` (lm-eval-harness), `compare` (result comparison), `report` (markdown generation). Backward-compatible with .env configs and result JSON.
+
+- **Community benchmark suite** (Session 011) — Added missing flags (`--fit-target`, `--fit-ctx`, `--fuse-gate-up-exps`, `--n-cpu-moe`), native llama-server support (`--native --server-bin`), PP-512 column in compare output, hardware fingerprint in results. E1: `--fit-ctx N` equivalent to `-c N --fit on` (same allocation, same speed). E2: `--fit-target 1536` recommended for vision (+4% TG over 2000, 1 fewer overflowing layer). E3/E4 blocked (build/model unavailable). **Speed regression**: S006 ~74 tok/s not reproducible since S007 (~50 tok/s consistently). GPU/CPU not throttled, same image/config/model — cause unknown. **Q4_K_M identity**: file was always Unsloth's (not bartowski's), confirmed by file size + GGUF metadata
 
 New CLI: `llm-bench` (install: `pip install -e .`). Replaces old bash scripts (kept for reference with deprecation notices):
 - `llm-bench speed` → replaces `bench-matrix.sh`
@@ -174,7 +176,7 @@ Legacy scripts still available: `bench-matrix.sh`, `compare-matrix.py`, `vision-
 
 ## Status
 
-**Production-ready.** Server achieves ~74 tok/s at Q4_K_M with 2.1% PPL loss. API is OpenAI-compatible. Session 008 extended validation: KV q8_0 free lunch confirmed at 65k-262k context (delta < 0.13%), full 262k native context works on 16GB GPU, AesSedai Q4_K_M verified as highest quality Q4 quant (KLD 0.0095), `--no-kv-offload` shown harmful (-63% TG), and lm-eval-harness attempted but generation-based evals unreliable for quant comparison with thinking models (max_gen_toks truncation). PPL/KLD remain the gold standard for quant quality assessment.
+**Production-ready.** Server achieves ~50 tok/s at Q4_K_M (Unsloth) with 2.1% PPL loss. Note: S006 measured ~74 tok/s but S007+ consistently measures ~50 tok/s — unexplained regression (GPU/CPU not throttled, same image/config/model, see S011 investigation). API is OpenAI-compatible. Session 008 extended validation: KV q8_0 free lunch confirmed at 65k-262k context (delta < 0.13%), full 262k native context works on 16GB GPU, AesSedai Q4_K_M verified as highest quality Q4 quant (KLD 0.0095), `--no-kv-offload` shown harmful (-63% TG), and lm-eval-harness attempted but generation-based evals unreliable for quant comparison with thinking models (max_gen_toks truncation). PPL/KLD remain the gold standard for quant quality assessment.
 
 ## Research Documentation
 
@@ -213,6 +215,17 @@ See `docs/dev/009-llm-bench-framework/` for Session 009 (complete):
 - Package: `llm_bench/` (24 files), installed via `pip install -e .`, entry point: `llm-bench`
 - 6 subcommands: setup, speed, quality, eval, compare, report
 - Backward-compatible with .env configs and existing result JSON files
+
+See `docs/dev/011-community-suite/` for Session 011 (complete):
+- `success-criteria.md` — 5 phases: missing flags, native support, PP visibility, experiments, cleanup
+- New flags: `--fit-target`, `--fit-ctx`, `--fuse-gate-up-exps`, `--n-cpu-moe` in FLAG_MAP + CLI
+- Native mode: `--native --server-bin /path/to/llama-server` (subprocess, not Docker)
+- PP visibility: compare shows PP-512 by default, `--pp-detail` for all PP lengths
+- Hardware fingerprint: GPU/VRAM/RAM/CPU saved in result JSON
+- Speed regression investigation: ~74→~50 tok/s, unexplained (GPU/CPU not throttled)
+- Q4_K_M identity: confirmed Unsloth's (not bartowski's) via file size + GGUF metadata
+- 3 experiment configs in `configs/llama-cpp-s011-*.env`
+- 8 benchmark results in `benchmarks/matrix/s011-*.json` (4 quick + 4 full)
 
 ### Daniel's Component Ablation Study
 

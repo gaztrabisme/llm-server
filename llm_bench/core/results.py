@@ -9,6 +9,35 @@ from pathlib import Path
 from typing import Any
 
 
+def detect_hardware() -> dict[str, Any]:
+    """Detect hardware fingerprint for embedding in result JSON.
+
+    Returns a dict like:
+        {"gpu": "NVIDIA GeForce RTX 5080", "gpu_vram_mb": 16303, "ram_gb": 128, "cpu_cores": 32}
+
+    Any field that can't be detected is omitted.
+    """
+    from .gpu import detect_gpu
+    from .hardware import detect_cpu, detect_ram
+
+    hw: dict[str, Any] = {}
+
+    gpu = detect_gpu()
+    if gpu is not None:
+        hw["gpu"] = gpu.name
+        hw["gpu_vram_mb"] = gpu.vram_total_mb
+
+    ram = detect_ram()
+    if ram.total_mb > 0:
+        hw["ram_gb"] = ram.total_mb // 1024
+
+    cpu = detect_cpu()
+    if cpu.cores > 0:
+        hw["cpu_cores"] = cpu.cores
+
+    return hw
+
+
 def create_result(
     label: str,
     matrix: dict[str, Any],
@@ -18,7 +47,7 @@ def create_result(
     thread_count: int = 20,
 ) -> dict[str, Any]:
     """Create a new result dict with metadata."""
-    return {
+    result: dict[str, Any] = {
         "label": label,
         "matrix": matrix,
         "config_file": config_file,
@@ -31,6 +60,12 @@ def create_result(
         "tg_benchmarks": {},
         "version": "llm-bench-0.1.0",
     }
+
+    hw = detect_hardware()
+    if hw:
+        result["hardware"] = hw
+
+    return result
 
 
 def save_result(result: dict[str, Any], output_dir: str = "./benchmarks/matrix") -> str:

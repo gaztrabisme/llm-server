@@ -32,6 +32,13 @@ server_args:
   # Uncomment for batch size tuning:
   # batch_size: 4096
   # ubatch_size: 4096
+  # Uncomment to set --fit VRAM budget (MB) or context adjustment:
+  # fit_target: 2000        # --fit-target N (reduce VRAM for experts)
+  # fit_ctx: 8192           # --fit-ctx N
+  # Uncomment to fuse gate+up expert matrices (~12% PP speedup, requires re-quantized GGUF):
+  # fuse_gate_up_exps: true # --fuse-gate-up-exps
+  # Uncomment for manual CPU MoE offload (non-CUDA / AMD / Vulkan users):
+  # n_cpu_moe: 24           # --n-cpu-moe N
 
 output:
   # Directory for benchmark result JSON files

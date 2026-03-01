@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,11 @@ from ..core.docker import (
     start_container,
     stop_container,
     wait_for_health,
+)
+from ..core.native import (
+    native_server_flags,
+    start_native_server,
+    stop_native_server,
 )
 from ..core.gpu import capture_vram
 from ..core.results import create_result, save_result
@@ -392,6 +398,10 @@ def _run_tg_benchmarks(
 @click.option("--port", type=int, default=None, help="Port override")
 @click.option("--kv-k", default=None, help="KV cache type K override")
 @click.option("--kv-v", default=None, help="KV cache type V override")
+@click.option("--fit-target", type=int, default=None, help="--fit-target N override (VRAM budget MB)")
+@click.option("--fit-ctx", type=int, default=None, help="--fit-ctx N override")
+@click.option("--n-cpu-moe", type=int, default=None, help="--n-cpu-moe N override (non-CUDA users)")
+@click.option("--fuse-gate-up-exps", is_flag=True, default=False, help="Enable --fuse-gate-up-exps")
 @click.option("--quick", is_flag=True, help="Fewer runs, fewer PP lengths")
 @click.option("--pp-only", is_flag=True, help="Only run prompt processing benchmarks")
 @click.option("--tg-only", is_flag=True, help="Only run token generation benchmarks")
@@ -414,6 +424,14 @@ def _run_tg_benchmarks(
     help="Output JSON path (overrides output.dir)",
 )
 @click.option("--verbose", is_flag=True, help="Show detailed output")
+@click.option(
+    "--native", is_flag=True,
+    help="Use native subprocess instead of Docker",
+)
+@click.option(
+    "--server-bin", default=None,
+    help="Path to llama-server binary (required with --native)",
+)
 def speed(
     config_path: str | None,
     env_path: str | None,
@@ -424,6 +442,10 @@ def speed(
     port: int | None,
     kv_k: str | None,
     kv_v: str | None,
+    fit_target: int | None,
+    fit_ctx: int | None,
+    n_cpu_moe: int | None,
+    fuse_gate_up_exps: bool,
     quick: bool,
     pp_only: bool,
     tg_only: bool,
@@ -434,11 +456,16 @@ def speed(
     dry_run: bool,
     output_path: str | None,
     verbose: bool,
+    native: bool,
+    server_bin: str | None,
 ) -> None:
     """Run PP and TG speed benchmarks against a llama.cpp server."""
 
     if pp_only and tg_only:
         raise click.UsageError("--pp-only and --tg-only are mutually exclusive")
+
+    if native and server_bin is None:
+        raise click.UsageError("--native requires --server-bin")
 
     # ------------------------------------------------------------------
     # 1. Config loading
@@ -476,6 +503,10 @@ def speed(
         label=label,
         kv_k=kv_k,
         kv_v=kv_v,
+        fit_target=fit_target,
+        fit_ctx=fit_ctx,
+        n_cpu_moe=n_cpu_moe,
+        fuse_gate_up_exps=fuse_gate_up_exps if fuse_gate_up_exps else None,
     )
 
     if label is not None:
@@ -512,13 +543,29 @@ def speed(
 
     # Server flags and matrix
     server_args = cfg.get("server_args", {})
-    flags = server_args_to_flags(server_args)
-    flags_str = server_args_to_string(server_args)
     matrix = extract_matrix(cfg)
 
     docker_image = cfg["server"]["image"]
     model_dir = cfg["server"].get("model_dir", "./models")
     thread_count = server_args.get("threads", 20)
+
+    # In native mode, resolve the model to a real filesystem path
+    if native:
+        model_value = server_args.get("model", "")
+        if model_value.startswith("/models/"):
+            # Docker-style path — resolve to model_dir + filename
+            model_value = os.path.join(
+                os.path.abspath(model_dir), model_value[len("/models/"):]
+            )
+        elif not os.path.isabs(model_value) and model_value:
+            # Resolve relative to CWD, not model_dir (avoids models/models/ doubling)
+            model_value = os.path.abspath(model_value)
+        native_flags = native_server_flags(server_args, model_path=model_value)
+        flags_str = " ".join(native_flags)
+        flags = native_flags
+    else:
+        flags = server_args_to_flags(server_args)
+        flags_str = server_args_to_string(server_args)
 
     # Output directory
     output_dir = cfg.get("output", {}).get("dir", "./benchmarks/matrix")
@@ -531,12 +578,17 @@ def speed(
     # ------------------------------------------------------------------
     # 3. Banner
     # ------------------------------------------------------------------
+    mode_label = "native" if native else "docker"
     click.echo(
-        f"Speed benchmark: {matrix['quant']} / kv={matrix['kv']} / ctx={matrix['ctx']}"
+        f"Speed benchmark: {matrix['quant']} / kv={matrix['kv']} / "
+        f"ctx={matrix['ctx']} ({mode_label})"
     )
     if verbose:
         click.echo(f"  Config: {config_file_ref}")
-        click.echo(f"  Image:  {docker_image}")
+        if native:
+            click.echo(f"  Binary: {server_bin}")
+        else:
+            click.echo(f"  Image:  {docker_image}")
         click.echo(f"  Flags:  {flags_str}")
         click.echo(f"  Label:  {result_label}")
     click.echo()
@@ -546,20 +598,29 @@ def speed(
     # ------------------------------------------------------------------
     if dry_run:
         click.echo("=== DRY RUN ===")
-        click.echo(f"  Docker image: {docker_image}")
+        if native:
+            click.echo(f"  Mode:         native")
+            click.echo(f"  Server bin:   {server_bin}")
+        else:
+            click.echo(f"  Mode:         docker")
+            click.echo(f"  Docker image: {docker_image}")
+            click.echo(f"  Model dir:    {os.path.abspath(model_dir)}")
         click.echo(f"  Server flags: {flags_str}")
-        click.echo(f"  Model dir:    {os.path.abspath(model_dir)}")
         click.echo(f"  Port:         {effective_port}")
         click.echo(f"  Server URL:   {server_url}")
         click.echo()
 
-        docker_cmd = (
-            f"docker run -d --gpus all --ipc host "
-            f"-v {os.path.abspath(model_dir)}:/models "
-            f"-p {effective_port}:{effective_port} "
-            f"{docker_image} {flags_str}"
-        )
-        click.echo(f"  Docker command:\n    {docker_cmd}")
+        if native:
+            native_cmd = f"{server_bin} {flags_str}"
+            click.echo(f"  Native command:\n    {native_cmd}")
+        else:
+            docker_cmd = (
+                f"docker run -d --gpus all --ipc host "
+                f"-v {os.path.abspath(model_dir)}:/models "
+                f"-p {effective_port}:{effective_port} "
+                f"{docker_image} {flags_str}"
+            )
+            click.echo(f"  Docker command:\n    {docker_cmd}")
         click.echo()
 
         if not tg_only:
@@ -597,9 +658,10 @@ def speed(
         return
 
     # ------------------------------------------------------------------
-    # 5. Docker lifecycle (unless --skip-server)
+    # 5. Server lifecycle (unless --skip-server)
     # ------------------------------------------------------------------
     container_name: str | None = None
+    native_proc: subprocess.Popen | None = None
 
     if not skip_server:
         if not check_port_available(effective_port):
@@ -609,19 +671,29 @@ def speed(
                 f"or --port to pick another port."
             )
 
-        click.echo("Starting server container...")
-        container_name = start_container(
-            image=docker_image,
-            server_flags=flags,
-            port=effective_port,
-            model_dir=model_dir,
-            container_prefix=cfg["server"].get("container_prefix", "llm-bench"),
-            verbose=verbose,
-        )
-        click.echo(f"  Container: {container_name}")
-
         health_timeout = cfg["server"].get("health_timeout", 600)
         health_interval = cfg["server"].get("health_interval", 5)
+
+        if native:
+            click.echo("Starting native server...")
+            native_proc = start_native_server(
+                server_bin=server_bin,
+                server_flags=flags,
+                verbose=verbose,
+            )
+            click.echo(f"  PID: {native_proc.pid}")
+        else:
+            click.echo("Starting server container...")
+            container_name = start_container(
+                image=docker_image,
+                server_flags=flags,
+                port=effective_port,
+                model_dir=model_dir,
+                container_prefix=cfg["server"].get("container_prefix", "llm-bench"),
+                verbose=verbose,
+            )
+            click.echo(f"  Container: {container_name}")
+
         click.echo(
             f"  Waiting for health (timeout {health_timeout}s)..."
         )
@@ -633,7 +705,7 @@ def speed(
         ):
             raise click.ClickException(
                 "Server failed to become healthy within timeout. "
-                "Check Docker logs for details."
+                "Check server output for details."
             )
         click.echo("  Server healthy.")
         click.echo()
@@ -684,13 +756,16 @@ def speed(
 
     finally:
         # ------------------------------------------------------------------
-        # 8. VRAM capture after bench + stop container
+        # 8. VRAM capture after bench + stop server
         # ------------------------------------------------------------------
         vram_after_bench = capture_vram()
         if vram_after_bench is not None:
             gpu_stats["after_bench"] = vram_after_bench.to_dict()
 
-        if container_name is not None:
+        if native_proc is not None:
+            click.echo("Stopping native server...")
+            stop_native_server(native_proc)
+        elif container_name is not None:
             click.echo("Stopping server container...")
             stop_container(container_name)
 
@@ -702,9 +777,12 @@ def speed(
         matrix=matrix,
         config_file=config_file_ref,
         server_args=flags_str,
-        docker_image=docker_image,
+        docker_image=server_bin if native else docker_image,
         thread_count=thread_count,
     )
+    if native:
+        result["execution_mode"] = "native"
+        result["server_bin"] = server_bin
     result["gpu_stats"] = gpu_stats
     result["pp_benchmarks"] = pp_benchmarks
     result["tg_benchmarks"] = tg_benchmarks

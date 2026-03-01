@@ -25,13 +25,18 @@ ENV_TO_KEY = {
     "LLAMA_ARG_BATCH_SIZE": "batch_size",
     "LLAMA_ARG_UBATCH_SIZE": "ubatch_size",
     "LLAMA_ARG_OFFLOAD_TENSORS": "offload_tensors",
+    "LLAMA_ARG_FIT_TARGET": "fit_target",
+    "LLAMA_ARG_FIT_CTX": "fit_ctx",
+    "LLAMA_ARG_FUSE_GATE_UP_EXPS": "fuse_gate_up_exps",
+    "LLAMA_ARG_N_CPU_MOE": "n_cpu_moe",
+    "LLAMA_ARG_MMPROJ": "mmproj",
 }
 
 # Keys that should be parsed as booleans
-BOOL_KEYS = {"flash_attn", "no_mmap", "jinja", "fit"}
+BOOL_KEYS = {"flash_attn", "no_mmap", "jinja", "fit", "fuse_gate_up_exps"}
 
 # Keys that should be parsed as integers
-INT_KEYS = {"ctx_size", "threads", "port", "n_gpu_layers", "batch_size", "ubatch_size"}
+INT_KEYS = {"ctx_size", "threads", "port", "n_gpu_layers", "batch_size", "ubatch_size", "fit_target", "fit_ctx", "n_cpu_moe"}
 
 
 def parse_env_file(path: str | Path) -> dict[str, Any]:

@@ -84,7 +84,13 @@ def _normalize_record(data: dict[str, Any], source_path: str = "") -> dict[str, 
         "vram_used": None,
         "vram_total": None,
         "_source": source_path,
+        "_hardware_gpu": None,
     }
+
+    # Hardware fingerprint (optional, may be absent in old results)
+    hardware = data.get("hardware", {})
+    if isinstance(hardware, dict) and hardware.get("gpu"):
+        record["_hardware_gpu"] = hardware["gpu"]
 
     # PP benchmarks
     pp_benchmarks = data.get("pp_benchmarks", {})
@@ -279,15 +285,24 @@ def _fmt_val_csv(entry: dict[str, Any] | None) -> str:
 # Determine visible columns
 # ---------------------------------------------------------------------------
 
-def _visible_metric_cols(term_width: int) -> list[str]:
-    """Return the list of metric column keys to display based on terminal width."""
-    pp_cols = [f"pp_{k}" for k in PP_KEYS]
+def _visible_metric_cols(term_width: int, pp_detail: bool = False) -> list[str]:
+    """Return the list of metric column keys to display based on terminal width.
+
+    Default: PP-512 + all TG columns.
+    --pp-detail: all PP lengths + all TG columns.
+    """
     tg_cols = list(TG_DISPLAY_KEYS)
+
+    if pp_detail:
+        pp_cols = [f"pp_{k}" for k in PP_KEYS]
+        return pp_cols + tg_cols
 
     if term_width < 100:
         # Very narrow: TG only
         return tg_cols
-    return pp_cols + tg_cols
+
+    # Default: PP-512 + TG
+    return ["pp_512"] + tg_cols
 
 
 def _col_name(key: str, compact: bool) -> str:
@@ -301,24 +316,42 @@ def _col_name(key: str, compact: bool) -> str:
 # Table formatting
 # ---------------------------------------------------------------------------
 
+def _has_mixed_hardware(records: list[dict[str, Any]]) -> bool:
+    """Check if records come from different machines (different GPU names)."""
+    gpus = {r["_hardware_gpu"] for r in records if r.get("_hardware_gpu")}
+    return len(gpus) > 1
+
+
+def _short_gpu_name(name: str | None) -> str:
+    """Shorten GPU name for display, e.g. 'NVIDIA GeForce RTX 5080' -> 'RTX 5080'."""
+    if not name:
+        return "-"
+    # Strip common prefixes
+    for prefix in ("NVIDIA GeForce ", "NVIDIA ", "AMD Radeon "):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def _format_table(records: list[dict[str, Any]], winners: dict[str, Any],
-                  group_by: str | None) -> str:
+                  group_by: str | None, pp_detail: bool = False) -> str:
     """Format records into an ASCII comparison table."""
     if not records:
         return "No benchmark results found."
 
     if group_by:
-        return _format_grouped_tables(records, winners, group_by)
+        return _format_grouped_tables(records, winners, group_by, pp_detail=pp_detail)
 
-    return _format_single_table(records, winners, omit_axis=None)
+    return _format_single_table(records, winners, omit_axis=None, pp_detail=pp_detail)
 
 
 def _format_single_table(records: list[dict[str, Any]], winners: dict[str, Any],
-                          omit_axis: str | None) -> str:
+                          omit_axis: str | None, pp_detail: bool = False) -> str:
     """Render one ASCII table."""
     term_width = shutil.get_terminal_size((120, 40)).columns
     compact = term_width < 160
-    metric_cols = _visible_metric_cols(term_width)
+    metric_cols = _visible_metric_cols(term_width, pp_detail=pp_detail)
+    show_hw = _has_mixed_hardware(records)
 
     # Matrix axis columns (omit the grouped one)
     axis_defs = [("quant", "Quant"), ("kv", "KV"), ("batch", "Batch"), ("ctx", "Ctx")]
@@ -326,6 +359,8 @@ def _format_single_table(records: list[dict[str, Any]], winners: dict[str, Any],
 
     # Build header
     header: list[str] = ["Label"]
+    if show_hw:
+        header.append("Hardware")
     for _, name in axis_cols:
         header.append(name)
     for mc in metric_cols:
@@ -336,6 +371,8 @@ def _format_single_table(records: list[dict[str, Any]], winners: dict[str, Any],
     rows: list[list[str]] = []
     for rec in records:
         row = [rec["label"]]
+        if show_hw:
+            row.append(_short_gpu_name(rec.get("_hardware_gpu")))
         for key, _ in axis_cols:
             row.append(str(rec.get(key, "-")))
         for mc in metric_cols:
@@ -394,7 +431,7 @@ def _format_single_table(records: list[dict[str, Any]], winners: dict[str, Any],
 
 
 def _format_grouped_tables(records: list[dict[str, Any]], winners: dict[str, Any],
-                           group_by: str) -> str:
+                           group_by: str, pp_detail: bool = False) -> str:
     """Format records as multiple tables grouped by a matrix axis."""
     groups: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
@@ -406,7 +443,8 @@ def _format_grouped_tables(records: list[dict[str, Any]], winners: dict[str, Any
         group_records = groups[group_val]
         group_winners = _compute_winners(group_records)
         header = f"=== {group_by.capitalize()}: {group_val} ==="
-        table = _format_single_table(group_records, group_winners, omit_axis=group_by)
+        table = _format_single_table(group_records, group_winners, omit_axis=group_by,
+                                     pp_detail=pp_detail)
         sections.append(f"{header}\n{table}")
 
     return "\n\n".join(sections)
@@ -416,15 +454,22 @@ def _format_grouped_tables(records: list[dict[str, Any]], winners: dict[str, Any
 # CSV formatting
 # ---------------------------------------------------------------------------
 
-def _format_csv(records: list[dict[str, Any]]) -> str:
+def _format_csv(records: list[dict[str, Any]], pp_detail: bool = False) -> str:
     """Format records as CSV with mean values only."""
-    metric_cols = [f"pp_{k}" for k in PP_KEYS] + list(TG_DISPLAY_KEYS)
+    if pp_detail:
+        metric_cols = [f"pp_{k}" for k in PP_KEYS] + list(TG_DISPLAY_KEYS)
+    else:
+        metric_cols = ["pp_512"] + list(TG_DISPLAY_KEYS)
+    show_hw = _has_mixed_hardware(records)
 
     buf = io.StringIO()
     writer = csv.writer(buf)
 
     # Header
-    header = ["Label", "Quant", "KV", "Batch", "Ctx"]
+    header = ["Label"]
+    if show_hw:
+        header.append("Hardware")
+    header.extend(["Quant", "KV", "Batch", "Ctx"])
     for mc in metric_cols:
         header.append(COLUMN_NAMES.get(mc, mc))
     header.append("VRAM")
@@ -432,13 +477,15 @@ def _format_csv(records: list[dict[str, Any]]) -> str:
 
     # Rows
     for rec in records:
-        row = [
-            rec["label"],
+        row = [rec["label"]]
+        if show_hw:
+            row.append(_short_gpu_name(rec.get("_hardware_gpu")))
+        row.extend([
             rec.get("quant", "-"),
             rec.get("kv", "-"),
             rec.get("batch", "-"),
             str(rec.get("ctx", "-")),
-        ]
+        ])
         for mc in metric_cols:
             row.append(_fmt_val_csv(rec.get(mc)))
         vram = rec.get("vram_used")
@@ -487,21 +534,25 @@ def _format_json(records: list[dict[str, Any]], winners: dict[str, Any]) -> dict
 # ---------------------------------------------------------------------------
 
 def _format_markdown(records: list[dict[str, Any]], winners: dict[str, Any],
-                     group_by: str | None) -> str:
+                     group_by: str | None, pp_detail: bool = False) -> str:
     """Format records as a markdown table."""
     if not records:
         return "No benchmark results found."
 
     if group_by:
-        return _format_grouped_markdown(records, winners, group_by)
+        return _format_grouped_markdown(records, winners, group_by, pp_detail=pp_detail)
 
-    return _format_single_markdown(records, winners, omit_axis=None)
+    return _format_single_markdown(records, winners, omit_axis=None, pp_detail=pp_detail)
 
 
 def _format_single_markdown(records: list[dict[str, Any]], winners: dict[str, Any],
-                             omit_axis: str | None) -> str:
+                             omit_axis: str | None, pp_detail: bool = False) -> str:
     """Render one markdown table."""
-    metric_cols = [f"pp_{k}" for k in PP_KEYS] + list(TG_DISPLAY_KEYS)
+    if pp_detail:
+        metric_cols = [f"pp_{k}" for k in PP_KEYS] + list(TG_DISPLAY_KEYS)
+    else:
+        metric_cols = ["pp_512"] + list(TG_DISPLAY_KEYS)
+    show_hw = _has_mixed_hardware(records)
 
     # Axis columns
     axis_defs = [("quant", "Quant"), ("kv", "KV"), ("batch", "Batch"), ("ctx", "Ctx")]
@@ -509,6 +560,8 @@ def _format_single_markdown(records: list[dict[str, Any]], winners: dict[str, An
 
     # Header
     header_cells = ["Label"]
+    if show_hw:
+        header_cells.append("Hardware")
     for _, name in axis_cols:
         header_cells.append(name)
     for mc in metric_cols:
@@ -522,6 +575,8 @@ def _format_single_markdown(records: list[dict[str, Any]], winners: dict[str, An
     # Data rows
     for rec in records:
         cells = [rec["label"]]
+        if show_hw:
+            cells.append(_short_gpu_name(rec.get("_hardware_gpu")))
         for key, _ in axis_cols:
             cells.append(str(rec.get(key, "-")))
         for mc in metric_cols:
@@ -557,7 +612,7 @@ def _format_single_markdown(records: list[dict[str, Any]], winners: dict[str, An
 
 
 def _format_grouped_markdown(records: list[dict[str, Any]], winners: dict[str, Any],
-                              group_by: str) -> str:
+                              group_by: str, pp_detail: bool = False) -> str:
     """Format records as grouped markdown tables."""
     groups: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
@@ -569,7 +624,8 @@ def _format_grouped_markdown(records: list[dict[str, Any]], winners: dict[str, A
         group_records = groups[group_val]
         group_winners = _compute_winners(group_records)
         header = f"### {group_by.capitalize()}: {group_val}"
-        table = _format_single_markdown(group_records, group_winners, omit_axis=group_by)
+        table = _format_single_markdown(group_records, group_winners, omit_axis=group_by,
+                                        pp_detail=pp_detail)
         sections.append(f"{header}\n\n{table}")
 
     return "\n\n".join(sections)
@@ -593,6 +649,8 @@ def _format_grouped_markdown(records: list[dict[str, Any]], winners: dict[str, A
 @click.option("--format", "output_format",
               type=click.Choice(["table", "csv", "json", "markdown"]),
               default="table", help="Output format (default: table)")
+@click.option("--pp-detail", is_flag=True,
+              help="Show all PP lengths (512/1024/4096/16384) instead of just PP-512")
 @click.option("--include-legacy", is_flag=True,
               help="Also scan old-format results in benchmarks/")
 @click.option("--output", "output_path", default=None,
@@ -604,6 +662,7 @@ def compare(
     group_by: str | None,
     sort_by: str,
     output_format: str,
+    pp_detail: bool,
     include_legacy: bool,
     output_path: str | None,
 ) -> None:
@@ -617,6 +676,7 @@ def compare(
     \b
     Examples:
         llm-bench compare
+        llm-bench compare --pp-detail
         llm-bench compare --filter s007-e1 --group-by ctx
         llm-bench compare --sort-by tg_mean --format markdown
         llm-bench compare result1.json result2.json
@@ -650,11 +710,11 @@ def compare(
 
     # 5. Format and output
     if output_format == "table":
-        output = _format_table(records, winners, group_by)
+        output = _format_table(records, winners, group_by, pp_detail=pp_detail)
         click.echo(output)
 
     elif output_format == "csv":
-        output = _format_csv(records)
+        output = _format_csv(records, pp_detail=pp_detail)
         click.echo(output, nl=False)
 
     elif output_format == "json":
@@ -662,7 +722,7 @@ def compare(
         click.echo(json.dumps(json_data, indent=2))
 
     elif output_format == "markdown":
-        output = _format_markdown(records, winners, group_by)
+        output = _format_markdown(records, winners, group_by, pp_detail=pp_detail)
         click.echo(output)
 
     # 6. Save comparison JSON if requested
