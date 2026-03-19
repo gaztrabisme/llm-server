@@ -1,13 +1,16 @@
 services:
-  # Production: Qwen3.5-35B-A3B Q4_K_M + fit-nobatch (~74 tok/s)
+  # Production: Qwen3.5-35B-A3B UD-Q4_K_XL (Dynamic 2.0, March 5) + fit-target 0 (~50 tok/s)
+  # Port 8081 — accessed via proxy on 8080, or directly for benchmarks
   llama-cpp:
     profiles: ["llama-cpp"]
     build:
       context: .
       dockerfile: docker/Dockerfile.llama-cpp
-    image: llm-server/llama-cpp:latest-fit
+      args:
+        LLAMA_CPP_REF: b8322
+    image: llm-server/llama-cpp:b8322
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
       - ./models:/models:ro
     deploy:
@@ -17,7 +20,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    env_file: configs/llama-cpp-s006-e4-fit-nobatch.env
+    env_file: configs/llama-cpp-s012-production.env
     ipc: host
     ulimits:
       memlock:

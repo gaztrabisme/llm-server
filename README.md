@@ -4,9 +4,9 @@ Local LLM inference server using llama.cpp, optimized for MoE model offloading o
 
 ## What This Is
 
-A production-ready setup for running **Qwen3.5-35B-A3B** (Mixture-of-Experts, ~3B active params per token) on an **RTX 5080 16GB** via llama.cpp with partial expert offloading. Achieves **~75 tok/s** generation speed at Q4_K_M quantization with only +2.1% perplexity loss vs the Q8_0 reference.
+A production-ready setup for running **Qwen3.5-35B-A3B** (Mixture-of-Experts, ~3B active params per token) on an **RTX 5080 16GB** via llama.cpp with partial expert offloading. Achieves **~50 tok/s** generation speed at UD-Q4_K_XL quantization with only +0.9% perplexity loss vs the Q8_0 reference.
 
-Includes a full benchmarking framework, Docker builds for Blackwell GPUs, and 6 sessions of documented optimization experiments.
+Includes a smart proxy with sampling presets and cold start, a benchmarking framework (`llm-bench`), Docker builds for Blackwell GPUs, and 12 sessions of documented optimization experiments.
 
 ## Hardware
 
@@ -22,40 +22,75 @@ Includes a full benchmarking framework, Docker builds for Blackwell GPUs, and 6 
 ### 1. Download the model
 
 ```bash
-# Using huggingface-cli (install via: pip install huggingface-hub)
-huggingface-cli download \
-  unsloth/Qwen3.5-35B-A3B-GGUF \
-  Qwen3.5-35B-A3B-Q4_K_M.gguf \
-  --local-dir ./models
+# Activate venv with huggingface-hub
+source .venv/bin/activate
+python -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download('unsloth/Qwen3.5-35B-A3B-GGUF',
+                'Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf',
+                local_dir='./models')
+"
 ```
 
 ### 2. Build the Docker image
 
 ```bash
-# Pin to a known-good llama.cpp commit (recommended)
 docker build \
   -f docker/Dockerfile.llama-cpp \
-  --build-arg LLAMA_CPP_REF=b8149 \
-  -t llm-server/llama-cpp:latest-fit \
+  --build-arg LLAMA_CPP_REF=b8322 \
+  -t llm-server/llama-cpp:b8322 \
   docker/
 ```
 
-### 3. Run the server
+### 3. Run via proxy (recommended)
+
+The proxy handles cold start, idle shutdown, and sampling presets:
 
 ```bash
-docker compose --profile llama-cpp up
+# Install proxy deps (one-time)
+source .venv/bin/activate
+pip install fastapi uvicorn httpx pyyaml
+
+# Start proxy — it will auto-start the llama-server container on first request
+python proxy.py
 ```
 
-Or run directly:
+### 4. Query the API
 
 ```bash
+# Basic request (no preset — pass-through)
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 256
+  }'
+
+# With sampling preset
+curl "http://localhost:8080/v1/chat/completions?mode=coding" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5",
+    "messages": [{"role": "user", "content": "Write a Python fibonacci function"}]
+  }'
+```
+
+### Alternative: Run without proxy
+
+```bash
+# Direct Docker Compose (llama-server on port 8081)
+docker compose --profile llama-cpp up
+
+# Or direct Docker run
 docker run --gpus all --ipc host \
-  -v ./models:/models \
+  -v ./models:/models:ro \
   -p 8080:8080 \
-  llm-server/llama-cpp:latest-fit \
-  -m /models/Qwen3.5-35B-A3B-Q4_K_M.gguf \
+  llm-server/llama-cpp:b8322 \
+  -m /models/Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf \
   -c 65536 \
   --fit on \
+  --fit-target 0 \
   -fa on \
   -t 20 \
   --no-mmap \
@@ -64,148 +99,118 @@ docker run --gpus all --ipc host \
   -ctv q8_0
 ```
 
-### 4. Query the API
+## Proxy
 
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "qwen3.5",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "max_tokens": 256
-  }'
-```
+`proxy.py` is a FastAPI reverse proxy that sits in front of llama-server on port 8080:
 
-The server exposes an OpenAI-compatible API at `localhost:8080`:
+- **Sampling presets**: Select via `?mode=<name>` or `X-Mode` header. Presets defined in `presets.yaml`
+- **Cold start**: Auto-starts the container on first request, polls health, forwards when ready (~10-20s)
+- **Idle shutdown**: Stops container after 30min of no requests to free VRAM
+- **Streaming**: Full SSE pass-through for `stream: true`
+
+### Available Presets
+
+| Mode | Temperature | top_p | presence_penalty | max_tokens | Use Case |
+|------|-------------|-------|------------------|------------|----------|
+| `thinking` | 1.0 | 0.95 | 1.5 | 32768 | General reasoning (default) |
+| `coding` | 0.6 | 0.95 | 0.0 | 32768 | Precise code generation |
+| `vision` | 1.0 | 0.95 | 1.5 | 81920 | Multimodal (needs bigger token budget) |
+| `instruct` | 0.7 | 0.8 | 1.5 | 32768 | Non-thinking mode |
+
+Presets are defaults — any parameter you specify in your request overrides the preset.
+
+## API
+
+The server exposes an OpenAI-compatible API:
 - `/v1/chat/completions`
 - `/v1/completions`
 - `/v1/embeddings`
 - `/v1/messages` (Anthropic Messages API)
 
+Proxy-specific endpoints:
+- `/health` — proxy + backend status
+- `/presets` — list available sampling presets
+
 ## Performance
 
-### Benchmark Results
+### Production Config (S012)
 
-All configs: 20 threads, 65K context, `--no-mmap`, KV cache q8_0.
-
-| Config | Quant | Strategy | tok/s | VRAM |
-|--------|-------|----------|-------|------|
-| **fit-nobatch** | **Q4_K_M** | **`--fit on`, no -b/-ub** | **74.7** | **14.6 GB** |
-| C7 | Q4_K_M | `--n-cpu-moe 24` (manual) | 69.6 | 14.9 GB |
-| MXFP4_MOE | MXFP4 | `--fit on`, no -b/-ub | 49.5 | 14.5 GB |
-| Q4_K_L | Q4_K_L | `--fit on`, no -b/-ub | 41.4 | 14.5 GB |
-| C4r | Q8_0 | `--fit on` (auto) | 40.5 | 14.7 GB |
-| C1 | Q8_0 | full offload | 35.7 | 8.1 GB |
-| 27B dense | Q4_K_M | `--fit on` | 7.4 | 14.1 GB |
+**~50 tok/s** with UD-Q4_K_XL (Unsloth Dynamic 2.0) + `--fit on --fit-target 0`, 14.7 GB VRAM.
 
 ### Quantization Quality
 
-WikiText-2 perplexity and KL divergence vs Q8_0 reference:
-
-| Quant | PPL | vs Q8_0 | Mean KLD | Same Top-1 % |
-|-------|-----|---------|----------|--------------|
-| Q8_0 (reference) | 6.5342 | — | — | — |
-| **Q4_K_M** | **6.6688** | **+2.1%** | **0.028** | **92.4%** |
-| Q4_K_L (bartowski) | 6.6125 | +1.2% | 0.018 | 94.2% |
-| MXFP4_MOE | ~5.9-6.2* | ~-0.6%* | 0.050 | 91.0% |
-| UD-Q4_K_XL | 7.1702 | +9.7% | 0.109 | 86.2% |
-
-*Partial evaluation (40 chunks) due to memory leak in MXFP4 dequant path.
+| Quant | Size | PPL | vs Q8_0 | Mean KLD | Same Top-1 % |
+|-------|------|-----|---------|----------|--------------|
+| Q8_0 (reference) | 36.9 GB | 6.5342 | -- | -- | -- |
+| **UD-Q4_K_XL** | **22.2 GB** | **6.5918** | **+0.9%** | **0.0137** | **94.7%** |
+| Q4_K_M (Unsloth) | 21.2 GB | 6.6053 | +1.1% | 0.0192 | 93.5% |
+| AesSedai Q4_K_M | ~21 GB | 6.3949 | -2.1% | 0.0095 | 95.7% |
 
 ### Key Findings
 
-- **KV cache q8_0 is a free lunch**: < 0.4% PPL difference, +12-38% throughput
-- **`--fit on` without `-b/-ub` is fastest**: batch flags consume VRAM that `--fit` needs for expert layers
-- **Q4_K_M is the best quant for 16GB VRAM**: alternatives are either slower (Q4_K_L -44%, MXFP4 -34%) or worse quality (UD-Q4_K_XL +9.7% PPL)
-- **MoE >> dense on consumer hardware**: 35B-A3B MoE is 10x faster than 27B dense AND has better quality
-- **UD-Q4_K_XL is NOT recommended** for MoE models: 3.9x worse KLD than Q4_K_M
-- **Speculative decoding**: no compatible draft model (vocab mismatch), ngram self-speculation provides no benefit
+- **KV cache q8_0 is a free lunch**: < 0.3% PPL difference across all context lengths (4k-128k)
+- **`--fit on --fit-target 0`**: Maximizes GPU layers by eliminating default VRAM margin. Safe on dedicated inference
+- **Do NOT use** `-b/-ub` batch flags with `--fit on` — they hurt TG by ~35%
+- **20 threads optimal** for Ryzen 9 9950X (Session 004 sweep)
+- **MoE >> dense**: 35B-A3B MoE is 10x faster than 27B dense with better quality
 
 ## Project Structure
 
 ```
 llm-server/
-├── CLAUDE.md                     # Detailed project docs and decisions
-├── docker-compose.yml            # One-command server startup
+├── proxy.py                     # Smart proxy (presets, cold start, idle shutdown)
+├── presets.yaml                 # Sampling presets from Qwen3.5 model card
+├── docker-compose.yml           # Container orchestration
 ├── docker/
-│   ├── Dockerfile.llama-cpp      # Mainline llama.cpp (CUDA 12.8, sm_120)
-│   └── Dockerfile.ik-llama-cpp   # ik_llama.cpp fork (deprecated)
-├── scripts/
-│   ├── bench.sh                  # Benchmark runner (4 workloads × N runs)
-│   ├── run-experiment.sh         # Multi-step experiment orchestrator
-│   ├── compare-results.py        # Parse & compare benchmark JSONs
-│   ├── quant-quality.sh          # PPL + KLD quality evaluation
-│   └── download-model.sh         # HuggingFace model downloader
-├── configs/                      # 40+ env files for different experiments
-│   ├── llama-cpp-baseline.env
-│   ├── llama-cpp-s006-e4-fit-nobatch.env  # Current winner
-│   └── ...
-├── benchmarks/                   # Results (gitignored)
-│   ├── *.json                    # Speed benchmark results
-│   ├── perplexity/               # PPL logs + WikiText-2 dataset
-│   └── kl-divergence/            # KLD base logits + comparison logs
-├── models/                       # GGUF files (gitignored)
-└── docs/dev/                     # 6 sessions of optimization research
-    ├── session-index.md
-    ├── 001-research-and-setup/
-    ├── 002-infra-and-benchmark/
-    ├── 003-optimization-sweep/
-    ├── 004-speedup-investigation/
-    ├── 005-qwen35-migration/
-    └── 006-community-followup/
+│   └── Dockerfile.llama-cpp     # llama.cpp CUDA build (sm_120)
+├── llm_bench/                   # Python benchmarking framework
+│   ├── commands/                # speed, quality, eval, compare, report, setup
+│   └── core/                    # config, docker, gpu, hardware, results, stats
+├── configs/                     # 77+ env files for experiments
+│   └── llama-cpp-s012-production.env  # Current production
+├── scripts/                     # Legacy benchmark scripts
+├── benchmarks/                  # Results (gitignored)
+├── models/                      # GGUF files (gitignored)
+└── docs/dev/                    # 12 sessions of optimization research
 ```
 
 ## Benchmarking
 
-Run a speed benchmark:
-
 ```bash
-./scripts/bench.sh llama-cpp s006-e4-fit-nobatch
+# Install the CLI
+pip install -e .
+
+# Speed benchmark
+llm-bench speed --env configs/llama-cpp-s012-production.env
+
+# Quick speed test
+llm-bench speed --env configs/llama-cpp-s012-production.env --quick
+
+# Compare results
+llm-bench compare
+
+# Full setup info
+llm-bench setup
 ```
 
-Run a full experiment (PPL + KLD + speed):
-
-```bash
-./scripts/run-experiment.sh e3
-```
-
-Compare results:
-
-```bash
-python3 scripts/compare-results.py benchmarks/
-```
-
-## Key Flags Explained
+## Key Flags
 
 | Flag | Purpose |
 |------|---------|
 | `--fit on` | Auto-split model between GPU and CPU based on available VRAM |
+| `--fit-target 0` | Eliminate default 1024 MiB VRAM margin (safe on dedicated box) |
 | `-fa on` | Flash attention (required for KV cache quantization) |
-| `-ctk q8_0 -ctv q8_0` | KV cache quantization — free throughput gain |
+| `-ctk q8_0 -ctv q8_0` | KV cache quantization -- free throughput gain |
 | `-t 20` | CPU threads (optimal for 32-core Ryzen 9 9950X) |
 | `--no-mmap` | Load full model into RAM upfront for consistent performance |
 | `--jinja` | Enable Jinja2 chat templates |
-| `-c 65536` | Context length (native max for Qwen3.5, extendable to 262K with YaRN) |
-
-**Do NOT use** `-b 4096 -ub 4096` with `--fit on` — batch buffers consume VRAM that `--fit` needs for expert layer allocation.
-
-## Optimization History
-
-| Session | Date | What | Result |
-|---------|------|------|--------|
-| 001 | Feb 17 | Research & setup | Hardware analysis, llama.cpp evaluation |
-| 002 | Feb 22 | Infrastructure + A/B benchmark | llama.cpp wins over ik_llama fork, 22 tok/s baseline |
-| 003 | Feb 24 | Optimization sweep | New flags negligible, rebuild regression detected |
-| 004 | Feb 25 | Speedup investigation | 20 threads optimal (+27%), speculative decoding research |
-| 005 | Feb 25 | Model migration (Qwen3.5-35B-A3B) | 3.2x speedup to ~70 tok/s, Q4_K_M validated |
-| 006 | Feb 26-27 | Community follow-up (7 experiments) | fit-nobatch ~75 tok/s, all quant alternatives tested |
-
-See `docs/dev/` for detailed findings from each session.
+| `-c 65536` | Context length (native max 262K, extendable to 1M via YaRN) |
 
 ## Requirements
 
 - NVIDIA GPU with CUDA support (tested on RTX 5080, should work on any GPU with enough VRAM)
 - Docker with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+- Python 3.12+ with venv for proxy and benchmarking tools
 - For Blackwell GPUs (RTX 50-series): build from source with CUDA 12.8+ for native sm_120 support
 
 ## License

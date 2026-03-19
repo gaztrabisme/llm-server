@@ -15,30 +15,31 @@ Run large Mixture-of-Experts models locally and serve them via API for other pro
 
 ## Primary Model
 
-**Qwen3.5-35B-A3B** — recommended quant: **UD-Q4_K_XL** (~20 GB, Unsloth), reference quant: Q8_0 (36.9 GB)
+**Qwen3.5-35B-A3B** — production quant: **UD-Q4_K_XL** (22.2 GB, Unsloth Dynamic 2.0, March 5 2026), reference quant: Q8_0 (36.9 GB)
 - MoE: 256 experts per layer, top-8 routing + 1 shared expert (9 active), 40 MoE layers, ~3B active params per token
 - 262,144 native context length (extensible to 1,010,000 via YaRN), production config uses `-c 65536` conservatively. Thinking mode enabled by default
-- WikiText-2 PPL: Q8_0 = 6.5342, UD-Q4_K_XL = 6.5959 (+1.0%), Q4_K_M = 6.6688 (+2.1%)
-- UD-Q4_K_XL (FIXED) is the best Q4-class quant: KLD 0.0145 vs Q4_K_M 0.0286, same-top-p 94.46% vs 92.46%. (S007 E4 — old UD quant had MXFP4 bug, now fixed)
-- Note: production server currently runs Q4_K_M (Unsloth, not bartowski — see S011). Speed: ~50 tok/s (S011 measurement, down from ~74 tok/s in S006 — see speed regression note below). UD-Q4_K_XL achieves ~48 tok/s with same config (similar speed, better quality)
+- WikiText-2 PPL: Q8_0 = 6.5342, UD-Q4_K_XL = 6.5918 (+0.9%), Q4_K_M = 6.6053 (+1.1%)
+- UD-Q4_K_XL (Dynamic 2.0) is the production quant: KLD 0.0137, PPL 6.5918. MXFP4 retired, new imatrix + quant algorithm (S012)
+- Production speed: **~50 tok/s** with `--fit on --fit-target 0` (17/41 layers overflowing, 6 MiB free). llama.cpp b8322
 
 Previous model: Qwen3-Next-80B-A3B-Instruct (Q8_0, 84.8 GB, ~22 tok/s) — replaced in Session 005
 
 ## Offloading Strategy
 
-Auto VRAM management via `--fit on`: llama.cpp automatically determines the optimal GPU/CPU split based on available VRAM. Key insight (Session 006): removing `-b/-ub` batch flags frees VRAM for more expert layers on GPU, yielding better throughput than manual `--n-cpu-moe` tuning. VRAM usage: ~14.6 GB.
+Auto VRAM management via `--fit on --fit-target 0`: llama.cpp automatically determines the optimal GPU/CPU split, with `--fit-target 0` eliminating the default 1024 MiB VRAM margin to maximize expert layers on GPU. Key insight (S012): default margin wastes 3 layers worth of VRAM — reducing to 0 drops overflowing layers from 20→17 and recovers ~25% TG speed. Safe on dedicated inference box. VRAM usage: ~14.7 GB (6 MiB free).
 
-**Production performance**: ~50 tok/s token generation (Q4_K_M + `--fit on`, no batch flags). S006 measured ~74 tok/s but this has not been reproducible since S007+ (see speed regression investigation in S011).
+**Production performance**: ~50 tok/s token generation (UD-Q4_K_XL + `--fit on --fit-target 0`, b8322). Same speed as old Q4_K_M config but better quality (KLD 0.0137 vs 0.0192).
 
 ## Reference Launch Command
 
-Winning config (fit-nobatch: Q4_K_M + auto offload, ~50 tok/s, Session 006/011):
+Winning config (S012: UD-Q4_K_XL + fit-target 0, ~50 tok/s, b8322):
 
 ```bash
 ./llama-server \
-  -m ./Qwen3.5-35B-A3B-Q4_K_M.gguf \
+  -m ./Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf \
   -c 65536 \
   --fit on \
+  --fit-target 0 \
   -fa on \
   -t 20 \
   --no-mmap \
@@ -47,7 +48,7 @@ Winning config (fit-nobatch: Q4_K_M + auto offload, ~50 tok/s, Session 006/011):
   -ctv q8_0
 ```
 
-Alternative (quality-first): Q8_0 + `--fit on` at ~40 tok/s (config C4r, requires b8149+ build with `--fit` support).
+Alternative (quality-first): Q8_0 + `--fit on` at ~40 tok/s. Previous config: Q4_K_M + `--fit on` (no fit-target) at ~50 tok/s but lower quality.
 
 ## Docker
 
@@ -55,9 +56,9 @@ Alternative (quality-first): Q8_0 + `--fit on` at ~40 tok/s (config C4r, require
 - Build flags: `-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_CUDA_FA_ALL_QUANTS=ON`
 - Build quirk: must symlink `libcuda.so.1` from CUDA stubs for Docker builds without GPU
 - **`LLAMA_CPP_REF` build arg**: pin llama.cpp to a specific commit/tag (e.g., `docker build --build-arg LLAMA_CPP_REF=b8149 .`). Unpinned builds caused 30% regression in Session 003/004.
-- Images: `llm-server/llama-cpp:latest` (HEAD ecbcb7e, supports --mmproj vision + perplexity overflow fix), `llm-server/llama-cpp:latest-fit` (b8149, supports `--fit on`)
+- Images: `llm-server/llama-cpp:b8322` (production, Mar 13 2026), `llm-server/llama-cpp:latest` (HEAD ecbcb7e, legacy), `llm-server/llama-cpp:latest-fit` (b8149, legacy)
 - Run with: `docker run --gpus all --ipc host`
-- Docker Compose: `docker compose --profile llama-cpp up`
+- Docker Compose: `docker compose --profile llama-cpp up` (llama-server on port 8081, proxy on 8080)
 - NVIDIA Container Toolkit v1.18.2 injects `libcuda.so.1` at runtime via `--gpus all`
 
 ## API
@@ -66,14 +67,54 @@ llama-server provides:
 - OpenAI-compatible: `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`
 - Anthropic Messages API: `/v1/messages` (merged Dec 2025)
 
+## Proxy (`proxy.py`)
+
+A FastAPI reverse proxy in front of llama-server providing sampling presets, cold start, and idle shutdown. Runs on the host, manages the llama-cpp Docker container via `docker compose`.
+
+- **Port mapping**: Proxy on `:8080`, llama-server on `:8081`. Direct access to `:8081` still works for benchmarks
+- **Presets**: Defined in `presets.yaml`. Select via `?mode=<name>` query param or `X-Mode: <name>` header. Caller-specified params override preset defaults
+  - `thinking` — temp 1.0, top_p 0.95, top_k 20, presence_penalty 1.5, max_tokens 32768 (model card default)
+  - `coding` — temp 0.6, presence_penalty 0.0, max_tokens 32768
+  - `vision` — same as thinking but max_tokens 81920 (bigger token budget for thinking + multimodal)
+  - `instruct` — temp 0.7, top_p 0.8, max_tokens 32768 (non-thinking mode)
+- **Cold start**: First request auto-starts the container, polls health, forwards when ready (~10-20s)
+- **Idle shutdown**: Stops container after 30min of no requests (configurable via `LLM_PROXY_IDLE_MINUTES`)
+- **Streaming**: SSE pass-through for `stream: true` requests
+- **Extra endpoints**: `/health` (proxy + backend status), `/presets` (list available presets)
+
+### Running the Proxy
+
+```bash
+source .venv/bin/activate && python proxy.py
+```
+
+### Environment Variables
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `LLM_PROXY_BACKEND` | `http://localhost:8081` | Backend URL |
+| `LLM_PROXY_IDLE_MINUTES` | `30` | Idle timeout (0 to disable) |
+| `LLM_PROXY_PROFILE` | `llama-cpp` | Docker Compose profile to manage |
+| `LLM_PROXY_HEALTH_TIMEOUT` | `120` | Max seconds to wait for backend startup |
+
+### Sampling Presets (from Qwen3.5 model card)
+
+The model card recommends different sampling parameters for different tasks. Key notes:
+- **Thinking mode** (default): temp=1.0 with presence_penalty=1.5 to reduce repetition
+- **Coding**: Lower temp=0.6 with no presence_penalty for precise output
+- **Vision**: Same as thinking but needs larger max_tokens (81920) for thinking chain + multimodal tokens
+- **Instruct** (non-thinking): Lower temp=0.7, tighter top_p=0.8
+- Model card minimum recommended context for thinking: 128K tokens
+- For highly complex problems (math/programming competitions): max_tokens=81920
+
 ## Key Constraints
 
-- 16 GB VRAM: partial MoE offload required — `--fit on` auto-splits ~16/40 layers to GPU with Q4_K_M, ~14.6 GB VRAM
+- 16 GB VRAM: partial MoE offload required — `--fit on --fit-target 0` maximizes GPU layers (17/41 overflowing with UD-Q4_K_XL, ~14.7 GB VRAM, 6 MiB free). Default `--fit-target 1024` wastes 3 layers (20 overflowing, -22% TG)
 - PCIe 5.0 bandwidth (~64 GB/s) is the bottleneck, not GPU compute
 - `--no-mmap` is important: loads entire model into RAM upfront for consistent offload performance
 - Thread count (`-t`) is tuned: **20 is optimal** (Session 004 sweep). U-shaped curve — t16 is worst, t8/t20/t24 are best tier
 - **KV cache q8_0 is a confirmed free lunch across all context lengths** (4k-32k): PPL delta < 0.3%, KLD < 0.019, same-top-p > 95.1% at every tested context length. KLD actually decreases from 4k→16k, slight uptick at 32k but well within noise. KV cache savings: q8_0 47%, q4_0 72%, asym 59% vs f16. Only 10 KV cache layers due to hybrid SSM architecture. **Caveat**: this "free lunch" is specific to MoE models with few KV layers — dense models (e.g. 27B) have KV on every layer, and Lucis_unbra reports 10 tok/s drop (75→65) with KV q8_0 on a 3090+Windows. (S006 E1 + S007 E1 full tier)
-- **UD-Q4_K_XL (FIXED) is the best Q4-class quant**: PPL 6.5959 (vs Q4_K_M 6.6688), KLD 0.0145 (vs 0.0286), same-top-p 94.46% (vs 92.46%). Better quality at same speed and size. Old UD quant had MXFP4 bug (S006 E2) — now fixed. (S007 E4)
+- **UD-Q4_K_XL (Dynamic 2.0, March 5) is the production quant**: PPL 6.5918, KLD 0.0137, 99.9% KLD 0.4097. MXFP4 retired, new imatrix + quant algorithm. With `--fit-target 0` matches Q4_K_M speed (~50 tok/s). (S012)
 - Do NOT use `-b/-ub` batch flags with `--fit on` — they hurt TG by ~35% and don't help PP at short prompts (512 tokens). At 1024+ tokens, asymmetric batch is only 8% faster PP, not worth the TG penalty. No-batch wins for all workloads. (S006 + S007 E2)
 - `--fit on` is CUDA-specific: Vulkan users report 2.5x slower (Corosus, 5070 Ti), ROCm users report 2.4x slower (Psyko38, RX 9060 XT). AMD/Vulkan users should use manual `--n-cpu-moe` instead
 
@@ -176,7 +217,7 @@ Legacy scripts still available: `bench-matrix.sh`, `compare-matrix.py`, `vision-
 
 ## Status
 
-**Production-ready.** Server achieves ~50 tok/s at Q4_K_M (Unsloth) with 2.1% PPL loss. Note: S006 measured ~74 tok/s but S007+ consistently measures ~50 tok/s — unexplained regression (GPU/CPU not throttled, same image/config/model, see S011 investigation). API is OpenAI-compatible. Session 008 extended validation: KV q8_0 free lunch confirmed at 65k-262k context (delta < 0.13%), full 262k native context works on 16GB GPU, AesSedai Q4_K_M verified as highest quality Q4 quant (KLD 0.0095), `--no-kv-offload` shown harmful (-63% TG), and lm-eval-harness attempted but generation-based evals unreliable for quant comparison with thinking models (max_gen_toks truncation). PPL/KLD remain the gold standard for quant quality assessment.
+**Production-ready.** Server achieves ~50 tok/s at UD-Q4_K_XL (Unsloth Dynamic 2.0, March 5 2026) with 0.9% PPL loss, using `--fit on --fit-target 0` on llama.cpp b8322. Key S012 finding: `--fit-target 0` eliminates wasted VRAM margin, recovering 3 overflowing layers (20→17) and +22% TG for the larger UD-Q4_K_XL model. API is OpenAI-compatible. Previous validated findings still apply: KV q8_0 free lunch at all context lengths, `--no-kv-offload` harmful, no batch flags, PPL/KLD best quality proxy.
 
 ## Research Documentation
 
