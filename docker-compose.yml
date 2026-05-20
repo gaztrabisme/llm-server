@@ -27,6 +27,108 @@ services:
         soft: -1
         hard: -1
 
+  # S016: Mainline MTP (b9204+, MTP merged). Default: 27B dream config
+  # Port 8081 — use --spec-type draft-mtp (not mtp!) for MTP speculation
+  # MUST use -np 1: default 4 slots pushes layers to CPU on 16GB
+  llama-cpp-s016:
+    profiles: ["llama-cpp-s016"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.llama-cpp
+      args:
+        LLAMA_CPP_REF: b9204
+    image: llm-server/llama-cpp:b9204
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    env_file: configs/llama-cpp-s016-a-27b-iq3-mtp.env
+    ipc: host
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  # S015: MTP (Multi-Token Prediction) + TurboQuant (quantized KV cache)
+  # Base: TheTom's turboquant fork merged with MTP from PR #22673
+  # Build with fallback: docker compose build --build-arg USE_FALLBACK=1 llama-cpp-s015
+  llama-cpp-s015:
+    profiles: ["llama-cpp-s015"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.llama-cpp-s015
+    image: llm-server/llama-cpp:s015-mtp-turbo
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    env_file: configs/llama-cpp-s015-e1-35b-baseline.env
+    ipc: host
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  # vLLM: Qwen3.5-4B BF16 for batch vision processing
+  # Port 8090 — OpenAI-compatible API natively served by vLLM
+  # Model: ~8.68 GB BF16 (full precision), 32k context, vision built-in
+  # Hybrid SSM arch (only 8 full-attn layers) → very cheap KV cache
+  # ~10.2 GB base + ~1 GB KV @ 32k = ~11.2 GB total, fits 16GB comfortably
+  # GPU-exclusive: do NOT run alongside llama-cpp (they share the GPU)
+  vllm:
+    profiles: ["vllm"]
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8090:8000"
+    volumes:
+      - /home/bppc/.cache/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    command:
+      - "Qwen/Qwen3.5-4B"
+      - "--served-model-name"
+      - "qwen3.5-4b"
+      - "--max-model-len"
+      - "32768"
+      - "--gpu-memory-utilization"
+      - "0.90"
+      - "--enforce-eager"
+      - "--limit-mm-per-prompt"
+      - '{"image": 2}'
+      - "--tensor-parallel-size"
+      - "1"
+      - "--reasoning-parser"
+      - "qwen3"
+      - "--trust-remote-code"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+
   # Vision: Q4_K_M + mmproj (requires latest-vision image built from b8177+)
   llama-cpp-vision:
     profiles: ["llama-cpp-vision"]

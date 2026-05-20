@@ -1167,3 +1167,192 @@ Majesticeuphoria
 
 This is some serious work, nice!
 1
+Gringe8
+•
+5h ago
+
+Your dense vs moe speed part is severly flawed. You do mention it needs to fit fully in vram, but you test one that doesnt fit fully in vram. You also dont mention prompt processing speed. I get 2000t/s pp and 28t/s tg on 27b q8.
+
+I do like your other tests. If you wamt to do more i would love to see quality differences between q4km and iq4ks. Then you could also test the speed since it should fit fully in your 5080.
+1
+UniversalJS
+•
+12h ago
+
+Great post and experiments! Inspired by your findings, I went a different direction: instead of optimizing Q4_K_M, I tested whether a smaller quant that fits mostly in VRAM could beat it on speed.
+
+Setup: RTX 5080 16GB, Intel Core Ultra 9 285K, llama.cpp built from source with CUDA 13.1 + native sm_120 (Blackwell), using your recommended flags (no batch flags, --fit on, KV q8_0).
+
+The problem with Q4_K_M on 16GB: The model is ~20 GB, so --fit offloads ~9 GB of expert weights to CPU. GPU sits at ~45% utilization waiting for CPU experts. That's the bottleneck.
+
+The idea: Q2_K_L (bartowski) is only ~13.8 GB. At 128k context, almost all expert weights stay on GPU (~800 MiB on CPU, mostly the embed/output layer from the 248K vocab — unavoidable).
+
+Results: 72% faster than Q4_K_M, with 2x the context. Even at 250k context (near the model's 262k training length), Q2_K_L still does 108 tok/s — 45% faster than Q4_K_M at 65k. The trade-off is obviously quality. Q2_K_L will have noticeably worse perplexity than Q4_K_M. But for interactive use, code generation, and tasks where speed matters more than peak accuracy, it's a compelling option on 16 GB cards.
+
+Interesting finding on context scaling: As context increases, --fit progressively offloads more expert layers to CPU to make room for the KV cache. The 515 MiB always on CPU (embed/output) is fixed, but at 250k context, total CPU offload grows to 2.3 GB. The speed degradation is graceful though — only 16% slower going from 128k to 250k.
+
+Also worth noting: Building from source with CUDA 13.1 matters for RTX 50-series. The prebuilt binaries use CUDA 12.4 which lacks sm_120 — you get JIT-compiled PTX from sm_89 instead of native Blackwell kernels.
+
+Launch command (128k context, sweet spot): ./llama-server -m ./Qwen3.5-35B-A3B-Q2_K_L.gguf -c 131072 --fit on -fa on -t 20 --no-mmap --jinja -ctk q8_0 -ctv q8_0
+
+Would love to see KLD/PPL numbers for Q2_K_L if anyone has the patience to run them. My gut says it's worse than Q4_K_M but the speed advantage is hard to ignore.
+1
+u/moahmo88 avatar
+moahmo88
+•
+11h ago
+
+I think you should try Qwen3.5-27B-GGUF Q3_K_S or Q3_K_M.
+2
+u/moahmo88 avatar
+moahmo88
+•
+16h ago
+
+You can try AesSedai/Qwen3.5-35B-A3B-GGUF Q5_K_M. 5070ti works well.Surprise！
+1
+u/moahmo88 avatar
+moahmo88
+•
+16h ago
+
+Amazing! Thanks.
+1
+u/soyalemujica avatar
+soyalemujica
+•
+16h ago
+• Edited 16h ago
+
+Alright, I gave this tutorial a try, compiled llama.cpp with the params as described, running on RTX5060ti 16GB + 64gb DDR5 6400mts/s, and I'm only getting 50t/s, did I do something wrong? Using CUDA 13.1 and latest NVIDIA drivers.
+Edit: Getting 55/s , which is an increase of 10t/s in LM Studio and precompiled public llama libraries, this is nice! The difference of 20 tokens might be because the 5080 has 960gb/s bandwidth vs 460gb/s bandwidth on my 5060TI I suppose...
+1
+u/soyalemujica avatar
+soyalemujica
+•
+14h ago
+
+Trying now the BF16 MXFP4_MOE model, it's giving me 35t/s and also thinking LESS and giving me a result quicker than the Q4_M model.
+1
+u/maho_Yun avatar
+maho_Yun
+•
+20h ago
+
+Thanks I have done tested base on this with my 5060ti and CLIP enabled
+
+Diff Quant and Flag tested with mmproj-BF16.
+--ctx-size 131072 -n 32768 --flash-attn on --kv-offload --no-mmap -ctk q8_0 -ctv q8_0
+Full Tom Sawyer.txt with promt: Write a Essay About it.
+Model & Config     Prompt Eval (t/s)     Eval/Gen (t/s)     Total Time (ms)
+Unsloth MXFP4 ncpumoe 24 b2024 ub 1024 (CUDA 12.4)     875.56     30.10     202,516
+Unsloth MXFP4 ncpumoe 24 b2024 ub 1024     929.55     32.32     186,634
+Unsloth-UD Q4_K_M ncpumoe 24 b2024 ub1024     860.97     34.34     183,707
+Unsloth-UD Q4_K_M fit on fit-target 1536     813.95     38.91     186,154
+Aessedai Q4_K_M ncpumoe30 b2024 ub1024     867.85     30.93     179,110
+Aessedai Q4_K_M fit on fit-target 1536     870.69     35.26     178,969
+Aessedai Q4_K_M fit on     199.74     25.45     613,891
+1
+KeldenL
+•
+1d ago
+
+dude this is incredible. i was doing tests on my end too and got tired at how slow it was (probably should've done it on lower context lengths)
+
+one thing that i may or may not have missed in the post, but who's Q4 quant are you using? unsloths? or others? i remember seeing another post about different quants
+1
+u/CATLLM avatar
+CATLLM
+•
+1d ago
+
+This is amazing thank you!
+
+Is it worth using
+
+--no-kv-offload
+
+to offload KV cache into ram?
+
+1
+bobaburger
+•
+1d ago
+emoji:Discord:
+
+Great work! I was thinking of making a separate post, but since this is also in the 16 GB VRAM category, I'm adding my findings for anyone using 5060 Ti here. My setup also using 32 GB DDR5 RAM.
+
+All tests were done with q8_0 kv cache, context window 128k, pp 18k, tg 768, depth 0. Why? Because this closes to a cold start with Claude Code. You can adjust the context window to lower for a bit more performance gain.
+Model     pp18432 (t/s)     tg768 (t/s)     Mean KLD
+Unsloth UD-Q4_K_M     1047.84     40.64     0.0192
+AesSedai Q4_K_M     928.10     34.89     0.0096
+Unsloth IQ3_S     1465.81     44.77     0.0457
+Unsloth MXFP4     1186.50     38.32     0.0272
+Unsloth UD-Q4_K_XL     1002.84     36.59     0.0137
+
+Mean KLD was from Unsloth's data.
+
+AesSedai's Q4_K_M has the best mean KLD, but it was the slowest, probably not worth it.
+
+So, same as OP on 5080, for 5060 Ti, Q4_K_M seems in the sweet spot, balanced between speed and quality.
+2
+KeldenL
+•
+1d ago
+
+this is super helpful! totally make it another post. all these quant posts (especially for 16gb, cuz selfishly i also have 16gb vram on my 4060ti) have been super enlightening and saves a lot of people a lot of testing!
+
+i wonder why your t/s was closer to 40 vs OP's 70, cuz that's what i'm seeing too on my end
+1
+bobaburger
+•
+1d ago
+emoji:Discord:
+
+thank you so much!
+
+the speed difference was due to two things:
+
+    the context window, mine was 128k, OP was 64k (-c 65536)
+
+    OP probably has stronger CPU than mine, and was using 20 threads (-t 20), mine was only 8 threads :D
+
+1
+u/mr_Owner avatar
+mr_Owner
+•
+1d ago
+
+Very nice but i believe when you put the pp speed besides them you could make better judgement.
+1
+u/OsmanthusBloom avatar
+OsmanthusBloom
+•
+1d ago
+
+This is great work! But I wonder about the effect of dropping the batch size adjustments. Normally you increase the ubatch size to improve prompt processing speed. It can increase drastically (eg 3x) when you raise ubatch from, say, 512 to 2048. But generation speed will suffer due to VRAM pressure. You didn't seem to benchmark pp speed separately. Maybe an ubatch size of, say, 1024 would have raised pp without hitting tg too much?
+2
+u/OsmanthusBloom avatar
+OsmanthusBloom
+•
+1d ago
+• Edited 1d ago
+
+Here is my llama-bench result, which shows that increasing ubatch from the default 512 to 1024 or 2048 increases prompt processing speeds a lot, from 280 t/s to 440 and 650 t/s. I have a RTX 3060 Laptop GPU with only 6GB VRAM so most of the model is offloaded to GPU. Using the UD_Q3_K_M quant released today.
+
+llama-bench -m Qwen3.5-35B-A3B-UD-Q3_K_M.gguf -ctk q8_0 -ctv q8_0 --n-cpu-moe 37 -p 4096 -n 512 -fa 1 -b 2048 -ub 512,1024,2048
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3060 Laptop GPU, compute capability 8.6, VMM: yes
+| model                          |       size |     params | backend    | ngl | n_ubatch | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe ?B Q8_0              |  15.53 GiB |    34.66 B | CUDA       |  99 |      512 |   q8_0 |   q8_0 |  1 |          pp4096 |        283.43 ± 1.24 |
+| qwen35moe ?B Q8_0              |  15.53 GiB |    34.66 B | CUDA       |  99 |      512 |   q8_0 |   q8_0 |  1 |           tg512 |         23.90 ± 0.63 |
+| qwen35moe ?B Q8_0              |  15.53 GiB |    34.66 B | CUDA       |  99 |     1024 |   q8_0 |   q8_0 |  1 |          pp4096 |        444.65 ± 1.35 |
+| qwen35moe ?B Q8_0              |  15.53 GiB |    34.66 B | CUDA       |  99 |     1024 |   q8_0 |   q8_0 |  1 |           tg512 |         23.62 ± 0.25 |
+| qwen35moe ?B Q8_0              |  15.53 GiB |    34.66 B | CUDA       |  99 |     2048 |   q8_0 |   q8_0 |  1 |          pp4096 |        648.85 ± 2.56 |
+| qwen35moe ?B Q8_0              |  15.53 GiB |    34.66 B | CUDA       |  99 |     2048 |   q8_0 |   q8_0 |  1 |           tg512 |         23.37 ± 0.35 |
+
+build: ecbcb7ea9 (8179)
+
+llama-bench doesn't support --fit so I had to set --n-cpu-moe manually according to the VRAM requirements of the largest ubatch size. With a smaller ubatch size and --fit, some more experts would fit in VRAM and thus generation speeds would be slightly higher. Still, getting much higher pp speeds is I important especially for agentic stuff where prompts can be quite long.
+1

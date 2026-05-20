@@ -30,13 +30,23 @@ ENV_TO_KEY = {
     "LLAMA_ARG_FUSE_GATE_UP_EXPS": "fuse_gate_up_exps",
     "LLAMA_ARG_N_CPU_MOE": "n_cpu_moe",
     "LLAMA_ARG_MMPROJ": "mmproj",
+    "LLAMA_ARG_MLOCK": "mlock",
+    "LLAMA_ARG_NO_WARMUP": "no_warmup",
+    "LLAMA_ARG_PARALLEL": "parallel",
+    "LLAMA_ARG_SPEC_TYPE": "spec_type",
+    "LLAMA_ARG_DRAFT_BLOCK_SIZE": "draft_block_size",
+    "LLAMA_ARG_CACHE_TYPE_K_DRAFT": "cache_type_k_draft",
+    "LLAMA_ARG_CACHE_TYPE_V_DRAFT": "cache_type_v_draft",
+    "LLAMA_ARG_CTX_CHECKPOINTS": "ctx_checkpoints",
+    "LLAMA_CHAT_TEMPLATE_KWARGS": "chat_template_kwargs",
+    "LLAMA_ARG_MAX_TOKENS": "max_tokens",
 }
 
 # Keys that should be parsed as booleans
-BOOL_KEYS = {"flash_attn", "no_mmap", "jinja", "fit", "fuse_gate_up_exps"}
+BOOL_KEYS = {"flash_attn", "no_mmap", "jinja", "fit", "fuse_gate_up_exps", "mlock", "no_warmup"}
 
 # Keys that should be parsed as integers
-INT_KEYS = {"ctx_size", "threads", "port", "n_gpu_layers", "batch_size", "ubatch_size", "fit_target", "fit_ctx", "n_cpu_moe"}
+INT_KEYS = {"ctx_size", "threads", "port", "n_gpu_layers", "batch_size", "ubatch_size", "fit_target", "fit_ctx", "n_cpu_moe", "parallel", "draft_block_size", "ctx_checkpoints", "max_tokens"}
 
 
 def parse_env_file(path: str | Path) -> dict[str, Any]:

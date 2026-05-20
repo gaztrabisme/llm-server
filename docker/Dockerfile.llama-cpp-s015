@@ -1,0 +1,87 @@
+# S015: llama.cpp with MTP (Multi-Token Prediction) + TurboQuant (quantized KV cache)
+# Base: TheTom's turboquant fork + MTP cherry-picked from PR #22673
+# Multi-stage: build in devel image, run in runtime image
+#
+# TurboQuant: quantized KV cache on-the-fly (q8_0/q4_0 etc) — requires GGML_CUDA_FA_ALL_QUANTS=ON
+# MTP: multi-token prediction for speculative decoding without a draft model
+#
+# Fallback: if merge conflicts occur between turboquant and MTP branches,
+# use AtomicBot-ai/atomic-llama-cpp-turboquant which reportedly has both combined.
+# Rebuild with: docker build --build-arg USE_FALLBACK=1 ...
+
+# === Build Stage ===
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fallback repo if merge between turboquant + MTP fails
+ARG FALLBACK_REPO="https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant.git"
+# Set USE_FALLBACK=1 to skip the merge and use the fallback repo directly
+ARG USE_FALLBACK=""
+
+WORKDIR /build
+
+# Clone TheTom's turboquant fork and merge MTP from am17an's branch.
+# If USE_FALLBACK is set, use AtomicBot-ai's combined repo instead.
+RUN if [ -n "$USE_FALLBACK" ]; then \
+      echo "=== Using fallback repo: $FALLBACK_REPO ===" && \
+      git clone --depth 100 "$FALLBACK_REPO" . ; \
+    else \
+      echo "=== Cloning TheTom/llama-cpp-turboquant (feature/turboquant-kv-cache) ===" && \
+      git clone --depth 100 --branch feature/turboquant-kv-cache \
+        https://github.com/TheTom/llama-cpp-turboquant.git . && \
+      echo "=== Fetching MTP branch from am17an/llama.cpp (PR #22673) ===" && \
+      git remote add mtp https://github.com/am17an/llama.cpp.git && \
+      git fetch mtp mtp-clean --depth=50 && \
+      echo "=== Merging MTP into turboquant ===" && \
+      git config user.email "build@docker" && \
+      git config user.name "Docker Build" && \
+      git merge mtp/mtp-clean --no-edit ; \
+    fi
+
+# Fix int32 overflow in perplexity KLD base mode for large-vocab models
+# n_ctx * nv overflows int32 when ctx >= 8648 (Qwen3.5 n_vocab=248320)
+# These patches may not apply cleanly to the fork — ignore failures with ||true
+RUN sed -i 's/log_probs\.resize(n_ctx \* nv)/log_probs.resize(size_t(n_ctx) * nv)/' tools/perplexity/perplexity.cpp 2>/dev/null || true \
+    && sed -i 's/n_token\*nv\*sizeof(uint16_t)/size_t(n_token)*nv*sizeof(uint16_t)/' tools/perplexity/perplexity.cpp 2>/dev/null || true \
+    && sed -i 's/n_chunk\*n_ctx\*sizeof(tokens\[0\])/size_t(n_chunk)*n_ctx*sizeof(tokens[0])/' tools/perplexity/perplexity.cpp 2>/dev/null || true \
+    && sed -i 's/\.data() + i\*nv/.data() + size_t(i)*nv/g' tools/perplexity/perplexity.cpp 2>/dev/null || true
+
+# Make CUDA driver stub findable by the linker (real libcuda.so is injected at runtime by nvidia-container-toolkit)
+# Need both libcuda.so and libcuda.so.1 — the shared lib records DT_NEEDED for libcuda.so.1
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+    && ldconfig
+
+# Build with CUDA, sm_120 (Blackwell), flash attention all quants (required for TurboQuant)
+RUN cmake -B build \
+    -DGGML_CUDA=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=120 \
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j$(nproc) \
+    && cmake --install build --prefix /opt/llama-cpp
+
+# === Runtime Stage ===
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/llama-cpp /opt/llama-cpp
+
+# Add to PATH and library search path
+ENV PATH="/opt/llama-cpp/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/llama-cpp/lib:${LD_LIBRARY_PATH}"
+
+# Default model mount point
+VOLUME /models
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["llama-server"]

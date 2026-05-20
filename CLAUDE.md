@@ -15,31 +15,37 @@ Run large Mixture-of-Experts models locally and serve them via API for other pro
 
 ## Primary Model
 
-**Qwen3.5-35B-A3B** — production quant: **UD-Q4_K_XL** (22.2 GB, Unsloth Dynamic 2.0, March 5 2026), reference quant: Q8_0 (36.9 GB)
+**Qwen3.6-35B-A3B** with **MTP** (Multi-Token Prediction) — production quant: **MTP-UD-Q4_K_XL** (havenoammo, ~22 GB + MTP head), reference quant: MTP-Q8_0 (36 GB, grafted locally)
 - MoE: 256 experts per layer, top-8 routing + 1 shared expert (9 active), 40 MoE layers, ~3B active params per token
-- 262,144 native context length (extensible to 1,010,000 via YaRN), production config uses `-c 65536` conservatively. Thinking mode enabled by default
-- WikiText-2 PPL: Q8_0 = 6.5342, UD-Q4_K_XL = 6.5918 (+0.9%), Q4_K_M = 6.6053 (+1.1%)
-- UD-Q4_K_XL (Dynamic 2.0) is the production quant: KLD 0.0137, PPL 6.5918. MXFP4 retired, new imatrix + quant algorithm (S012)
-- Production speed: **~50 tok/s** with `--fit on --fit-target 0` (17/41 layers overflowing, 6 MiB free). llama.cpp b8322
+- Hybrid architecture: Gated DeltaNet + Attention (only ~10 full-attention layers need KV cache, SSM layers use recurrent state)
+- 262,144 native context length, production config uses `-c 131072` (MoE KV is tiny — fits 131k even with MTP on 16GB)
+- MTP: `--spec-type draft-mtp --spec-draft-n-max 2` — 35% TG speedup via speculative multi-token prediction. Merged mainline at b9190 (May 16 2026)
+- Production speed: **~74 tok/s avg, 86 peak** with MTP + `--fit on --fit-target 1536`. llama.cpp b9204
+- Quality: GSM8K 91%, CodeNeedle 217/220, 131k context stable
 
-Previous model: Qwen3-Next-80B-A3B-Instruct (Q8_0, 84.8 GB, ~22 tok/s) — replaced in Session 005
+**Alternative**: Qwen3.6-27B MTP-UD-IQ3_XXS (12.45 GB, grafted) — fits fully on GPU (66/66 layers), 74 tok/s avg, perfect CodeNeedle 220/220. Max context 56k (q8_0 KV) / 110k (q4_0 KV). Best for VRAM-constrained setups (8-12 GB)
+
+Previous models: Qwen3.5-35B-A3B UD-Q4_K_XL (~50 tok/s, b8322) → Qwen3-Next-80B-A3B (~22 tok/s, S005)
 
 ## Offloading Strategy
 
-Auto VRAM management via `--fit on --fit-target 0`: llama.cpp automatically determines the optimal GPU/CPU split, with `--fit-target 0` eliminating the default 1024 MiB VRAM margin to maximize expert layers on GPU. Key insight (S012): default margin wastes 3 layers worth of VRAM — reducing to 0 drops overflowing layers from 20→17 and recovers ~25% TG speed. Safe on dedicated inference box. VRAM usage: ~14.7 GB (6 MiB free).
+Auto VRAM management via `--fit on --fit-target 1536`: llama.cpp automatically determines the optimal GPU/CPU split. `--fit-target 1536` reserves 1536 MiB for MTP compute buffer + KV cache. Without MTP, `--fit-target 0` is optimal (S012). With MTP, `--fit-target 0` OOMs on compute buffer allocation.
 
-**Production performance**: ~50 tok/s token generation (UD-Q4_K_XL + `--fit on --fit-target 0`, b8322). Same speed as old Q4_K_M config but better quality (KLD 0.0137 vs 0.0192).
+**Production performance**: Context-dependent. At short context (≤32k) with `--fit-target 0`: ~97 tok/s. At 128k context (coding agents) with `--fit-target 1536`: ~56 tok/s TG, ~1,584 tok/s PP. `--fit-target 0` OOMs at 64k+ because KV cache has no headroom. MTP is a wash at 128k (same 56 tok/s either way) but 23% slower at short context (74 vs 97). MTP only helps when model fits fully on GPU (27B IQ3: 73 tok/s with MTP). PP: 1,855 tok/s at 8k → 1,584 at 128k.
+
+**Concurrency**: `-np 2` gives ~2x batch throughput (1.1 vs 0.8 cases/min) at 30% slower per-request speed. `-np 4` pushes layers to CPU and fails. Use `-np 1` for interactive, `-np 2` for batch evals. (S016 I5)
 
 ## Reference Launch Command
 
-Winning config (S012: UD-Q4_K_XL + fit-target 0, ~50 tok/s, b8322):
+Production config (S016.5: 35B MTP-UD-Q4_K_XL, ~56 tok/s at 128k, b9204):
 
 ```bash
 ./llama-server \
-  -m ./Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf \
-  -c 65536 \
+  -m ./Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf \
+  -c 131072 \
+  -np 1 \
   --fit on \
-  --fit-target 0 \
+  --fit-target 1536 \
   -fa on \
   -t 20 \
   --no-mmap \
@@ -48,7 +54,18 @@ Winning config (S012: UD-Q4_K_XL + fit-target 0, ~50 tok/s, b8322):
   -ctv q8_0
 ```
 
-Alternative (quality-first): Q8_0 + `--fit on` at ~40 tok/s. Previous config: Q4_K_M + `--fit on` (no fit-target) at ~50 tok/s but lower quality.
+For short-context speed mode (≤32k, chatbot/quick queries): use `-c 32768 --fit-target 0` for ~97 tok/s. MTP (`--spec-type draft-mtp --spec-draft-n-max 2`) is optional — doesn't help at 128k, slightly hurts at short context.
+
+**Critical MTP notes**:
+- Flag is `--spec-type draft-mtp` (NOT `mtp`) — mainline renamed it
+- `--spec-draft-n-max 2` is optimal (n-max 3 is slower due to lower acceptance)
+- Default creates 4 parallel slots — **must set `-np 1`** explicitly (4 slots pushes layers to CPU, halving speed)
+- `--fit-target 1536` reserves VRAM for MTP compute buffer (0 causes OOM)
+- **MTP hurts partial-offload models**: 97 → 74 tok/s on 35B MoE (-23%). Only helps when model fits fully on GPU
+
+Alternative (27B dream config, fully on GPU): `Qwen3.6-27B-MTP-UD-IQ3_XXS.gguf` with `--fit-target 0` + MTP, ~73 tok/s, max 56k context (q8_0 KV) / 110k (q4_0 KV).
+
+Previous config (S012): Qwen3.5-35B-A3B UD-Q4_K_XL + `--fit-target 0` at ~50 tok/s, b8322.
 
 ## Docker
 
@@ -56,9 +73,9 @@ Alternative (quality-first): Q8_0 + `--fit on` at ~40 tok/s. Previous config: Q4
 - Build flags: `-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_CUDA_FA_ALL_QUANTS=ON`
 - Build quirk: must symlink `libcuda.so.1` from CUDA stubs for Docker builds without GPU
 - **`LLAMA_CPP_REF` build arg**: pin llama.cpp to a specific commit/tag (e.g., `docker build --build-arg LLAMA_CPP_REF=b8149 .`). Unpinned builds caused 30% regression in Session 003/004.
-- Images: `llm-server/llama-cpp:b8322` (production, Mar 13 2026), `llm-server/llama-cpp:latest` (HEAD ecbcb7e, legacy), `llm-server/llama-cpp:latest-fit` (b8149, legacy)
+- Images: `llm-server/llama-cpp:b9204` (production, May 18 2026, MTP mainline), `llm-server/llama-cpp:b8322` (legacy non-MTP), `llm-server/llama-cpp:s015-mtp` (am17an fork, legacy)
 - Run with: `docker run --gpus all --ipc host`
-- Docker Compose: `docker compose --profile llama-cpp up` (llama-server on port 8081, proxy on 8080)
+- Docker Compose: `docker compose --profile llama-cpp-s016 up` (mainline MTP on port 8081, proxy on 8080)
 - NVIDIA Container Toolkit v1.18.2 injects `libcuda.so.1` at runtime via `--gpus all`
 
 ## API
@@ -194,6 +211,15 @@ Compare with: `python3 scripts/compare-results.py benchmarks/`
 
 - **Community benchmark suite** (Session 011) — Added missing flags (`--fit-target`, `--fit-ctx`, `--fuse-gate-up-exps`, `--n-cpu-moe`), native llama-server support (`--native --server-bin`), PP-512 column in compare output, hardware fingerprint in results. E1: `--fit-ctx N` equivalent to `-c N --fit on` (same allocation, same speed). E2: `--fit-target 1536` recommended for vision (+4% TG over 2000, 1 fewer overflowing layer). E3/E4 blocked (build/model unavailable). **Speed regression**: S006 ~74 tok/s not reproducible since S007 (~50 tok/s consistently). GPU/CPU not throttled, same image/config/model — cause unknown. **Q4_K_M identity**: file was always Unsloth's (not bartowski's), confirmed by file size + GGUF metadata
 
+- **MTP mainline migration** (Session 016) — MTP merged at b9204. `--spec-type draft-mtp --spec-draft-n-max 2`. Production speed: 74 tok/s (from 50 tok/s, +48%). Critical: must use `-np 1` (default 4 pushes layers to CPU), `--fit-target 1536` (0 OOMs with MTP)
+- **Qwen3.6 head-to-head** (Session 016 Phase 5) — 27B IQ3+MTP vs 35B Q4_K_XL+MTP vs 35B Q8_0+MTP. 35B Q4_K_XL wins: same speed as 27B (74 tok/s), 131k context (vs 27B's 56k), GSM8K 91%. Q8_0 is 38% slower with negligible quality gain
+- **Context limits with MTP** (Session 016) — 27B: 56k q8_0 / 110k q4_0 KV (MTP compute buffer is bottleneck, 529 MiB). 35B MoE: 131k+ both KV types (only ~10 KV layers). OOM is MTP compute buffer, not KV cache
+- **-np concurrency sweep** (Session 016 I5) — np=2 gives ~2x batch throughput at 30% slower per-request. np=4 OOMs. np=1 for interactive
+- **Ubatch PP trick evaluation** (Session 016 B-T3) — coder543's `-ub 8192` trick doesn't apply with `--fit on` (OOMs at -ub 2048+). Only helps `--n-cpu-moe` manual offload
+- **graft-mtp.py generalized** (Session 016) — auto-detects architecture prefix (qwen35 vs qwen35moe). Used to create 35B Q8_0 MTP GGUF from base + MTP head
+- **Concurrent eval in llama-eval.py** (Session 016) — `--concurrency N` flag, asyncio + aiohttp, works with `-np N -kvu`
+- **MTP hurts partial-offload, b9204 baseline faster** (Session 016.5) — 35B MoE: 97 tok/s without MTP (fit-target 0) vs 74 tok/s with MTP (fit-target 1536). MTP compute buffer reserves 1.5 GB, pushing ~3 MoE layers to CPU. MTP only helps when model fits fully on GPU (27B: 73 tok/s with MTP). PP speed measured: 2,400 tok/s at 8k tokens (35B), 1,850 (27B). VRAM breakdown captured for all configs.
+
 New CLI: `llm-bench` (install: `pip install -e .`). Replaces old bash scripts (kept for reference with deprecation notices):
 - `llm-bench speed` → replaces `bench-matrix.sh`
 - `llm-bench quality` → replaces `quant-quality.sh`
@@ -205,19 +231,19 @@ New CLI: `llm-bench` (install: `pip install -e .`). Replaces old bash scripts (k
 Legacy scripts still available: `bench-matrix.sh`, `compare-matrix.py`, `vision-eval.sh`, `run-eval-suite.sh`, `lib-bench-common.sh`.
 
 ### Ready to Test
-- **Thinking mode** — on by default in Qwen3.5, verify it works well with downstream apps
-- **Chat template** — community reports GGUF embedded template may be incomplete, test with explicit `--chat-template`
+- **vLLM head-to-head** (Session 017) — vLLM >= 0.19.0 supports MTP natively, PagedAttention for dynamic KV, TurboQuant KV cache. Could solve MTP context OOM issue. docker-compose already wired
 - **`--fuse-gate-up-exps`** — b8164 feature, ~12% PP speedup for MoE, requires re-quantizing the GGUF
+- **`-khad` (Hadamard KV rotation)** — mainline PR #21038, raketenkater reports benefits
 
 ### Future / Blocked
 - Expert caching (locality-based, LFU) — not in mainline llama.cpp, HOBBIT paper shows 10x potential but no public code
 - cuBLAS Grouped GEMM (CUDA 13.1 — up to 4x MoE speedup, needs llama.cpp support)
 - FP4 quantization via Blackwell's native Tensor Core support
-- Draft-model speculative decoding — blocked until small Qwen3.5 model (1-3B) is released
+- TurboQuant KV cache — rejected from mainline llama.cpp, only available in forks. Qwen3.6-27B hybrid architecture makes it net negative due to recurrent state overhead
 
 ## Status
 
-**Production-ready.** Server achieves ~50 tok/s at UD-Q4_K_XL (Unsloth Dynamic 2.0, March 5 2026) with 0.9% PPL loss, using `--fit on --fit-target 0` on llama.cpp b8322. Key S012 finding: `--fit-target 0` eliminates wasted VRAM margin, recovering 3 overflowing layers (20→17) and +22% TG for the larger UD-Q4_K_XL model. API is OpenAI-compatible. Previous validated findings still apply: KV q8_0 free lunch at all context lengths, `--no-kv-offload` harmful, no batch flags, PPL/KLD best quality proxy.
+**Production-ready.** Server achieves **~56 tok/s at 128k context** (coding-agent workload) and **~97 tok/s at short context** (≤32k) with Qwen3.6-35B-A3B MTP-UD-Q4_K_XL on llama.cpp b9204. PP: 1,584 tok/s at 128k (81s to process full context). 131k context stable with q8_0 KV. GSM8K 91%, CodeNeedle 217/220. Key S016.5 findings: `--fit-target 1536` required for 64k+ context (0 OOMs on KV growth), MTP is a wash at 128k (same 56 tok/s), short-context speed mode uses `--fit-target 0 -c 32768` for 97 tok/s. MTP only helps 27B IQ3 (fits fully on GPU, 73 tok/s). API is OpenAI-compatible. Previous findings still apply: KV q8_0 free lunch, no batch flags, no kv-offload, `-np 1` mandatory.
 
 ## Research Documentation
 
@@ -267,6 +293,17 @@ See `docs/dev/011-community-suite/` for Session 011 (complete):
 - Q4_K_M identity: confirmed Unsloth's (not bartowski's) via file size + GGUF metadata
 - 3 experiment configs in `configs/llama-cpp-s011-*.env`
 - 8 benchmark results in `benchmarks/matrix/s011-*.json` (4 quick + 4 full)
+
+See `docs/dev/016-dream-config-and-eval/` for Session 016 (complete):
+- `success-criteria.md` — Phases 0-5 complete: GGUF graft, flag sweep, dream config validation, llama-eval benchmarks, comprehensive head-to-head
+- Phase 5 head-to-head: 3 models × 5 tests = 15 experiments. 35B Q4_K_XL+MTP wins (74 tok/s, 131k ctx, GSM8K 91%)
+- MTP mainline migration: b9204, `--spec-type draft-mtp`, `-np 1` mandatory, `--fit-target 1536`
+- Context limits: 27B max 56k q8_0 / 110k q4_0, 35B MoE 131k+ (MoE KV advantage)
+- graft-mtp.py: generalized for qwen35/qwen35moe architectures
+- -np sweep: np=2 optimal for batch (2x throughput), np=4 OOMs
+- 3 config files in `configs/llama-cpp-s016-*.env`
+- Benchmark results in `benchmarks/s016-*.json`
+- Scripts: `s016-run-config.sh`, `s016-ubatch-sweep.sh`, `s016-np-sweep.sh`
 
 ### Daniel's Component Ablation Study
 

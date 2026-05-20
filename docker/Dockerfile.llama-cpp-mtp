@@ -1,0 +1,51 @@
+# S015: llama.cpp with MTP (Multi-Token Prediction) from PR #22673
+# Source: am17an/llama.cpp mtp-clean branch
+# No TurboQuant — for Qwen3.6 MTP experiments only
+
+# === Build Stage ===
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN git clone --depth 100 --branch mtp-clean https://github.com/am17an/llama.cpp.git .
+
+# Fix int32 overflow in perplexity KLD base mode for large-vocab models
+RUN sed -i 's/log_probs\.resize(n_ctx \* nv)/log_probs.resize(size_t(n_ctx) * nv)/' tools/perplexity/perplexity.cpp 2>/dev/null || true \
+    && sed -i 's/n_token\*nv\*sizeof(uint16_t)/size_t(n_token)*nv*sizeof(uint16_t)/' tools/perplexity/perplexity.cpp 2>/dev/null || true \
+    && sed -i 's/n_chunk\*n_ctx\*sizeof(tokens\[0\])/size_t(n_chunk)*n_ctx*sizeof(tokens[0])/' tools/perplexity/perplexity.cpp 2>/dev/null || true \
+    && sed -i 's/\.data() + i\*nv/.data() + size_t(i)*nv/g' tools/perplexity/perplexity.cpp 2>/dev/null || true
+
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+    && ldconfig
+
+RUN cmake -B build \
+    -DGGML_CUDA=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=120 \
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j$(nproc) \
+    && cmake --install build --prefix /opt/llama-cpp
+
+# === Runtime Stage ===
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/llama-cpp /opt/llama-cpp
+
+ENV PATH="/opt/llama-cpp/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/llama-cpp/lib:${LD_LIBRARY_PATH}"
+
+VOLUME /models
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["llama-server"]

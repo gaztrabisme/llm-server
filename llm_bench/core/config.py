@@ -76,13 +76,23 @@ FLAG_MAP = {
     "fit_ctx": "--fit-ctx",
     "fuse_gate_up_exps": "--fuse-gate-up-exps",
     "n_cpu_moe": "--n-cpu-moe",
+    "mlock": "--mlock",
+    "no_warmup": "--no-warmup",
+    "parallel": "-np",
+    "spec_type": "--spec-type",
+    "draft_block_size": "--draft-block-size",
+    "cache_type_k_draft": "-ctkd",
+    "cache_type_v_draft": "-ctvd",
+    "ctx_checkpoints": "-ctxcp",
+    "chat_template_kwargs": "--chat-template-kwargs",
+    "max_tokens": "-n",
 }
 
 # Boolean flags that take "on"/"off" values (not just presence/absence)
 BOOL_ON_OFF_FLAGS = {"flash_attn", "fit"}
 
 # Boolean flags that are just presence flags (no value)
-BOOL_PRESENCE_FLAGS = {"no_mmap", "jinja", "fuse_gate_up_exps"}
+BOOL_PRESENCE_FLAGS = {"no_mmap", "jinja", "fuse_gate_up_exps", "mlock", "no_warmup"}
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -198,17 +208,39 @@ def resolve_model_path(cfg: dict[str, Any]) -> str | None:
 def _detect_quant(model_path: str) -> str:
     """Detect quantization from model filename."""
     name = os.path.basename(model_path).upper()
+
+    # Check for MTP first — strip it, detect base quant, then append suffix
+    mtp_suffix = ""
+    if "MTP" in name:
+        mtp_suffix = "-MTP"
+        # Remove MTP (and surrounding separators) for base quant detection
+        name = name.replace("-MTP-", "-").replace("-MTP.", ".").replace("-MTP", "").replace("MTP-", "")
+
+    # UD quants (more specific patterns first)
+    if "UD-IQ3_XXS" in name or "UD_IQ3_XXS" in name:
+        return "UD-IQ3_XXS" + mtp_suffix
+    if "UD-IQ2_XXS" in name or "UD_IQ2_XXS" in name:
+        return "UD-IQ2_XXS" + mtp_suffix
+    if "UD-Q2_K_XL" in name or "UD_Q2_K_XL" in name:
+        return "UD-Q2_K_XL" + mtp_suffix
+    if "UD-Q3_K_XL" in name or "UD_Q3_K_XL" in name:
+        return "UD-Q3_K_XL" + mtp_suffix
     if "UD-Q4_K_XL" in name or "UD_Q4_K_XL" in name:
-        return "UD-Q4_K_XL"
+        return "UD-Q4_K_XL" + mtp_suffix
+    # Non-UD IQ quants
+    if "IQ3_XXS" in name:
+        return "IQ3_XXS" + mtp_suffix
+    if "IQ2_XXS" in name:
+        return "IQ2_XXS" + mtp_suffix
     if "MXFP4" in name:
-        return "MXFP4_MOE"
+        return "MXFP4_MOE" + mtp_suffix
     if "Q4_K_L" in name:
-        return "Q4_K_L"
+        return "Q4_K_L" + mtp_suffix
     if "Q4_K_M" in name:
-        return "Q4_K_M"
+        return "Q4_K_M" + mtp_suffix
     if "Q8_0" in name:
-        return "Q8_0"
-    return "unknown"
+        return "Q8_0" + mtp_suffix
+    return "unknown" + mtp_suffix if mtp_suffix else "unknown"
 
 
 def _detect_kv(k: str, v: str) -> str:
