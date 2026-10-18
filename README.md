@@ -146,6 +146,8 @@ Proxy-specific endpoints:
 | Q4_K_M (Unsloth) | 21.2 GB | 6.6053 | +1.1% | 0.0192 | 93.5% |
 | AesSedai Q4_K_M | ~21 GB | 6.3949 | -2.1% | 0.0095 | 95.7% |
 
+![Mean KL divergence from the Q8_0 reference, per quantisation](docs/images/quant-kld.png)
+
 ### Key Findings
 
 - **KV cache q8_0 is a free lunch**: < 0.3% PPL difference across all context lengths (4k-128k)
